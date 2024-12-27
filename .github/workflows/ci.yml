@@ -11,6 +11,7 @@ jobs:
         command: [
           "lint/go",
           "test/go",
+          "build",
         ]
 
     runs-on: ubuntu-latest
