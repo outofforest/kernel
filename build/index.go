@@ -6,5 +6,5 @@ import (
 
 // Commands is a definition of commands available in build system.
 var Commands = map[string]types.Command{
-	"build": {Fn: buildBootloader, Description: "Builds EFI bootloader"},
+	"build": {Fn: buildLoader, Description: "Builds loader"},
 }
