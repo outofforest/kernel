@@ -21,14 +21,16 @@ import (
 	"github.com/outofforest/tools/pkg/tools/zig"
 )
 
+// https://koji.fedoraproject.org/koji/
+
 const (
 	initBinPath   = "bin/init"
 	initramfsPath = "bin/embed/initramfs"
 	kernelPath    = "bin/embed/vmlinuz"
 	//nolint:lll
-	kernelCoreURL    = "https://kojipkgs.fedoraproject.org//packages/kernel/6.12.7/200.fc41/x86_64/kernel-core-6.12.7-200.fc41.x86_64.rpm"
+	kernelCoreURL    = "https://kojipkgs.fedoraproject.org//packages/kernel/6.12.6/200.fc41/x86_64/kernel-core-6.12.6-200.fc41.x86_64.rpm"
 	kernelFileSuffix = "vmlinuz"
-	kernelSHA256     = "5cd46b0ba12275d811470c84a8d0fbfcda364d278d40be8a9d0ade2d9f396752"
+	kernelSHA256     = "c569dabe134e7f2134800dc4c57658bea5da0e7933c703e297a1affd009023d6"
 )
 
 func buildLoader(ctx context.Context, deps types.DepsFunc) error {
@@ -150,8 +152,9 @@ func downloadKernel(ctx context.Context, deps types.DepsFunc) error {
 				return errors.WithStack(err)
 			}
 
-			if hex.EncodeToString(hasher.Sum(nil)) != kernelSHA256 {
-				return errors.New("kernel checksum mismatch")
+			hash := hex.EncodeToString(hasher.Sum(nil))
+			if hash != kernelSHA256 {
+				return errors.Errorf("kernel checksum mismatch, actual: %s", hash)
 			}
 
 			return nil
