@@ -30,13 +30,12 @@ pub fn main() uefi.Status {
         return onError(ret, "Loading kernel failed.");
     }
 
-    // This is here to demonstrate passing cmd args to the kernel.
     var loaded_vmlinuz: *uefi.protocol.LoadedImage = undefined;
     ret = boot_services.handleProtocol(vmlinuz_handle.?, &uefi.protocol.LoadedImage.guid, @ptrCast(&loaded_vmlinuz));
     if (ret != uefi.Status.Success) {
         return onError(ret, "Retrieving kernel image info failed.");
     }
-    const cmd align(2097152) = [_:0]u16{ 't', 'e', 's', 't' };
+    const cmd align(2097152) = [_:0]u16{ 's', 'e', 'l', 'i','n','u','x','=','0' };
     loaded_vmlinuz.load_options = @constCast(@ptrCast(&cmd[0]));
     loaded_vmlinuz.load_options_size = 2 * (cmd.len + 1);
 
