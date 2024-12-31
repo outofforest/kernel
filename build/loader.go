@@ -17,15 +17,16 @@ import (
 )
 
 const (
-	initBinPath      = "bin/init"
-	initramfsPath    = "bin/embed/initramfs"
-	kernelPath       = "bin/embed/vmlinuz"
-	kernelFilePrefix = "usr/lib/modules/"
-	kernelFileSuffix = "/vmlinuz"
+	initBinPath       = "bin/init"
+	initramfsPath     = "bin/embed/initramfs"
+	initramfsBasePath = "bin/embed/initramfs.base"
+	kernelPath        = "bin/embed/vmlinuz"
+	kernelFilePrefix  = "usr/lib/modules/"
+	kernelFileSuffix  = "/vmlinuz"
 )
 
 func buildLoader(ctx context.Context, deps types.DepsFunc) error {
-	deps(buildInit, extractKernel, zig.EnsureZig)
+	deps(prepareEmbeds, zig.EnsureZig)
 
 	return zig.Build(ctx, deps, zig.BuildConfig{
 		PackagePath: "loader",
@@ -33,22 +34,29 @@ func buildLoader(ctx context.Context, deps types.DepsFunc) error {
 	})
 }
 
-func extractKernel(ctx context.Context, deps types.DepsFunc) error {
-	initramfsF, err := os.Open(initramfsPath)
+func prepareEmbeds(ctx context.Context, deps types.DepsFunc) error {
+	deps(buildInit)
+
+	initramfsF, err := os.OpenFile(initramfsPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	defer initramfsF.Close()
 
-	c, err := gzip.NewReader(initramfsF)
+	initramfsBaseF, err := os.Open(initramfsBasePath)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	defer c.Close()
+	defer initramfsF.Close()
 
-	// return nil
+	tReader := io.TeeReader(initramfsBaseF, initramfsF)
+	cReader, err := gzip.NewReader(tReader)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer cReader.Close()
 
-	r := cpio.NewReader(c)
+	r := cpio.NewReader(cReader)
 	for {
 		fInfo, err := r.Next()
 		switch {
@@ -67,10 +75,48 @@ func extractKernel(ctx context.Context, deps types.DepsFunc) error {
 			}
 			defer vmlinuzF.Close()
 
-			_, err = io.Copy(vmlinuzF, r)
-			return errors.WithStack(err)
+			if _, err := io.Copy(vmlinuzF, r); err != nil {
+				return errors.WithStack(err)
+			}
+
+			break
 		}
 	}
+
+	if _, err := io.ReadAll(tReader); err != nil {
+		return errors.WithStack(err)
+	}
+
+	cWriter := gzip.NewWriter(initramfsF)
+	defer cWriter.Close()
+
+	w := cpio.NewWriter(cWriter)
+	defer w.Close()
+
+	initF, err := os.Open(initBinPath)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer initF.Close()
+
+	initSize, err := initF.Seek(0, io.SeekEnd)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = initF.Seek(0, io.SeekStart)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := w.WriteHeader(&cpio.Header{
+		Name: "init",
+		Mode: 0o700,
+		Size: initSize,
+	}); err != nil {
+		return errors.WithStack(err)
+	}
+	_, err = io.Copy(w, initF)
+	return errors.WithStack(err)
 }
 
 func buildInit(ctx context.Context, deps types.DepsFunc) error {
