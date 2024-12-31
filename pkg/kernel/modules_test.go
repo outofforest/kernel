@@ -1,3 +1,5 @@
+//go:build nogithub
+
 package kernel
 
 import (
