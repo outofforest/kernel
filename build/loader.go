@@ -16,13 +16,11 @@ import (
 	"github.com/outofforest/tools/pkg/tools/zig"
 )
 
-// https://koji.fedoraproject.org/koji/
-
 const (
 	initBinPath      = "bin/init"
 	initramfsPath    = "bin/embed/initramfs"
 	kernelPath       = "bin/embed/vmlinuz"
-	kernelFilePrefix = "root/usr/lib/modules/"
+	kernelFilePrefix = "usr/lib/modules/"
 	kernelFileSuffix = "/vmlinuz"
 )
 

@@ -18,7 +18,7 @@ import (
 )
 
 func loadOverlay() error {
-	f, err := os.Open("/root/usr/lib/modules/6.12.6-200.fc41.x86_64/kernel/fs/overlayfs/overlay.ko.xz")
+	f, err := os.Open("/usr/lib/modules/6.12.6-200.fc41.x86_64/kernel/fs/overlayfs/overlay.ko.xz")
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -66,26 +66,23 @@ func main() {
 		if err := os.MkdirAll("/overlay/work", 0o755); err != nil {
 			return errors.WithStack(err)
 		}
-		if err := os.MkdirAll("/overlay/root2", 0o755); err != nil {
+		if err := os.MkdirAll("/overlay/newroot", 0o755); err != nil {
 			return errors.WithStack(err)
 		}
-		if err := syscall.Mount("overlay", "/overlay/root2", "overlay", 0,
-			"lowerdir=/root,upperdir=/overlay/upper,workdir=/overlay/work"); err != nil {
+		if err := syscall.Mount("overlay", "/overlay/newroot", "overlay", 0,
+			"lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work"); err != nil {
 			return errors.WithStack(err)
 		}
-		if err := os.Chdir("/overlay/root2"); err != nil {
+		if err := os.Chdir("/overlay/newroot"); err != nil {
 			return errors.WithStack(err)
 		}
-		if err := syscall.Mount("/overlay/root2", "/", "", syscall.MS_MOVE, ""); err != nil {
+		if err := syscall.Mount("/overlay/newroot", "/", "", syscall.MS_MOVE, ""); err != nil {
 			return errors.WithStack(err)
 		}
 		if err := syscall.Chroot("."); err != nil {
 			return errors.WithStack(err)
 		}
-		if err := os.MkdirAll("/etc/selinux", 0o755); err != nil {
-			return errors.WithStack(err)
-		}
-		if err := os.WriteFile("/etc/selinux/config", []byte("SELINUX=disabled"), 0o644); err != nil {
+		if err := os.Remove("/overlay"); err != nil {
 			return errors.WithStack(err)
 		}
 
