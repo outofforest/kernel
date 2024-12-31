@@ -3,17 +3,12 @@ package build
 import (
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
-	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/cavaliergopher/cpio"
 	"github.com/pkg/errors"
-	"github.com/sassoftware/go-rpmutils"
 
 	"github.com/outofforest/build/v2/pkg/tools"
 	"github.com/outofforest/build/v2/pkg/types"
@@ -24,17 +19,15 @@ import (
 // https://koji.fedoraproject.org/koji/
 
 const (
-	initBinPath   = "bin/init"
-	initramfsPath = "bin/embed/initramfs"
-	kernelPath    = "bin/embed/vmlinuz"
-	//nolint:lll
-	kernelCoreURL    = "https://kojipkgs.fedoraproject.org//packages/kernel/6.12.6/200.fc41/x86_64/kernel-core-6.12.6-200.fc41.x86_64.rpm"
-	kernelFileSuffix = "vmlinuz"
-	kernelSHA256     = "c569dabe134e7f2134800dc4c57658bea5da0e7933c703e297a1affd009023d6"
+	initBinPath      = "bin/init"
+	initramfsPath    = "bin/embed/initramfs"
+	kernelPath       = "bin/embed/vmlinuz"
+	kernelFilePrefix = "root/usr/lib/modules/"
+	kernelFileSuffix = "/vmlinuz"
 )
 
 func buildLoader(ctx context.Context, deps types.DepsFunc) error {
-	deps(buildInitramfs, downloadKernel, zig.EnsureZig)
+	deps(buildInit, extractKernel, zig.EnsureZig)
 
 	return zig.Build(ctx, deps, zig.BuildConfig{
 		PackagePath: "loader",
@@ -42,59 +35,44 @@ func buildLoader(ctx context.Context, deps types.DepsFunc) error {
 	})
 }
 
-func buildInitramfs(ctx context.Context, deps types.DepsFunc) error {
-	deps(buildInit)
-
-	// return nil
-
-	initF, err := os.Open(initBinPath)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer initF.Close()
-
-	initSize, err := initF.Seek(0, io.SeekEnd)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	_, err = initF.Seek(0, io.SeekStart)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(initramfsPath), 0o700); err != nil {
-		return errors.WithStack(err)
-	}
-
-	initramfsF, err := os.OpenFile(initramfsPath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0o600)
+func extractKernel(ctx context.Context, deps types.DepsFunc) error {
+	initramfsF, err := os.Open(initramfsPath)
 	if err != nil {
 		return errors.WithStack(err)
 	}
 	defer initramfsF.Close()
 
-	cWriter := gzip.NewWriter(initramfsF)
-	defer cWriter.Close()
-
-	w := cpio.NewWriter(cWriter)
-	defer w.Close()
-
-	if err := w.WriteHeader(&cpio.Header{
-		Name: "init",
-		Mode: 0o700,
-		Size: initSize,
-	}); err != nil {
+	c, err := gzip.NewReader(initramfsF)
+	if err != nil {
 		return errors.WithStack(err)
 	}
-	if _, err := io.Copy(w, initF); err != nil {
-		return errors.WithStack(err)
-	}
+	defer c.Close()
 
-	// The /proc/self/exe path used by os.Executable is resolved at init time before procfs is mounted.
-	// To make it work fake /proc/self/exe has to be provided before starting GO application as init process.
-	return errors.WithStack(w.WriteHeader(&cpio.Header{
-		Name:     "proc/self/exe",
-		Linkname: "init",
-	}))
+	// return nil
+
+	r := cpio.NewReader(c)
+	for {
+		fInfo, err := r.Next()
+		switch {
+		case err == nil:
+		case errors.Is(err, io.EOF):
+			return errors.New("kernel not found in rpm")
+		default:
+			return errors.WithStack(err)
+		}
+
+		if strings.HasPrefix(fInfo.Name, kernelFilePrefix) && strings.HasSuffix(fInfo.Name, kernelFileSuffix) &&
+			fInfo.Linkname == "" {
+			vmlinuzF, err := os.OpenFile(kernelPath, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0o700)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			defer vmlinuzF.Close()
+
+			_, err = io.Copy(vmlinuzF, r)
+			return errors.WithStack(err)
+		}
+	}
 }
 
 func buildInit(ctx context.Context, deps types.DepsFunc) error {
@@ -105,61 +83,4 @@ func buildInit(ctx context.Context, deps types.DepsFunc) error {
 		PackagePath:   "init",
 		BinOutputPath: initBinPath,
 	})
-}
-
-func downloadKernel(ctx context.Context, deps types.DepsFunc) error {
-	if err := os.MkdirAll(filepath.Dir(kernelPath), 0o700); err != nil {
-		return errors.WithStack(err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, kernelCoreURL, nil)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer resp.Body.Close()
-
-	rpm, err := rpmutils.ReadRpm(resp.Body)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	pReader, err := rpm.PayloadReaderExtended()
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	for {
-		fInfo, err := pReader.Next()
-		switch {
-		case err == nil:
-		case errors.Is(err, io.EOF):
-			return errors.New("kernel not found in rpm")
-		default:
-			return errors.WithStack(err)
-		}
-
-		if strings.HasSuffix(fInfo.Name(), kernelFileSuffix) && !pReader.IsLink() {
-			vmlinuzF, err := os.OpenFile(kernelPath, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0o700)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer vmlinuzF.Close()
-
-			hasher := sha256.New()
-
-			if _, err := io.Copy(vmlinuzF, io.TeeReader(pReader, hasher)); err != nil {
-				return errors.WithStack(err)
-			}
-
-			hash := hex.EncodeToString(hasher.Sum(nil))
-			if hash != kernelSHA256 {
-				return errors.Errorf("kernel checksum mismatch, actual: %s", hash)
-			}
-
-			return nil
-		}
-	}
 }
