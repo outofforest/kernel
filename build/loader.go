@@ -124,7 +124,7 @@ func buildInit(ctx context.Context, deps types.DepsFunc) error {
 
 	return golang.Build(ctx, deps, golang.BuildConfig{
 		Platform:      tools.PlatformLocal,
-		PackagePath:   "init",
+		PackagePath:   "cmd/init",
 		BinOutputPath: initBinPath,
 	})
 }
