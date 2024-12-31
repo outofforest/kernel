@@ -28,7 +28,14 @@ func main() {
 
 		fmt.Println("I am outofforest init process!")
 
-		if err := kernel.LoadModule("kernel/fs/overlayfs/overlay.ko.xz"); err != nil {
+		if err := os.MkdirAll("/proc", 0o555); err != nil {
+			return errors.WithStack(err)
+		}
+		if err := syscall.Mount("none", "/proc", "proc", 0, ""); err != nil {
+			return errors.WithStack(err)
+		}
+
+		if err := kernel.LoadModule("overlay"); err != nil {
 			return err
 		}
 
