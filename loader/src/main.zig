@@ -35,7 +35,10 @@ pub fn main() uefi.Status {
     if (ret != uefi.Status.Success) {
         return onError(ret, "Retrieving kernel image info failed.");
     }
-    const cmd align(2097152) = [_:0]u16{ 's', 'e', 'l', 'i','n','u','x','=','0' };
+    const cmd align(2097152) = [_:0]u16{
+        's', 'e', 'l', 'i','n','u','x','=','0', ' ',
+        'd','e','f','a','u','l','t','_','h','u','g','e','p','a','g','e','s','z','=','1','G' ,
+    };
     loaded_vmlinuz.load_options = @constCast(@ptrCast(&cmd[0]));
     loaded_vmlinuz.load_options_size = 2 * (cmd.len + 1);
 
