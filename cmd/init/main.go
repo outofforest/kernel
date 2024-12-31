@@ -10,7 +10,7 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
-	"github.com/outofforest/kernel/init/pkg/kernel"
+	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/run"
 )

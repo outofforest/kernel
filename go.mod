@@ -1,4 +1,4 @@
-module github.com/outofforest/kernel/init
+module github.com/outofforest/cloudless
 
 go 1.23
 
