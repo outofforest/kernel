@@ -45,6 +45,8 @@ func buildLoader(ctx context.Context, deps types.DepsFunc) error {
 func buildInitramfs(ctx context.Context, deps types.DepsFunc) error {
 	deps(buildInit)
 
+	// return nil
+
 	initF, err := os.Open(initBinPath)
 	if err != nil {
 		return errors.WithStack(err)
