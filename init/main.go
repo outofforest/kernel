@@ -3,39 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/ulikunitz/xz"
 	"go.uber.org/zap"
-	"golang.org/x/sys/unix"
 
+	"github.com/outofforest/kernel/init/pkg/kernel"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/run"
 )
-
-func loadOverlay() error {
-	f, err := os.Open("/usr/lib/modules/6.12.6-200.fc41.x86_64/kernel/fs/overlayfs/overlay.ko.xz")
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer f.Close()
-
-	r, err := xz.NewReader(f)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	mod, err := io.ReadAll(r)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	return errors.WithStack(unix.InitModule(mod, ""))
-}
 
 func main() {
 	run.New().Run(context.Background(), "init", func(ctx context.Context) (retErr error) {
@@ -48,9 +26,9 @@ func main() {
 			}
 		}()
 
-		fmt.Println("I am init 3")
+		fmt.Println("I am outofforest init process!")
 
-		if err := loadOverlay(); err != nil {
+		if err := kernel.LoadModule("kernel/fs/overlayfs/overlay.ko.xz"); err != nil {
 			return err
 		}
 
