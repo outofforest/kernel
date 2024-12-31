@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -36,7 +37,8 @@ func LoadModule(realModule string) error {
 		return err
 	}
 
-	for _, m := range modulesToLoad {
+	for i := len(modulesToLoad) - 1; i >= 0; i-- {
+		m := modulesToLoad[i]
 		loaded, err := isLoaded(m)
 		if err != nil {
 			return err
@@ -235,6 +237,8 @@ func isLoaded(modulePath string) (bool, error) {
 }
 
 func loadModule(modulePath string) error {
+	fmt.Println(modulePath)
+
 	release, err := Release()
 	if err != nil {
 		return err
