@@ -27,8 +27,17 @@ func TmpFS(dir string) error {
 
 // Root mounts root filesystem.
 func Root() error {
+	if err := ProcFS("/proc"); err != nil {
+		return err
+	}
 	if err := kernel.LoadModule("overlay"); err != nil {
 		return err
+	}
+	if err := syscall.Unmount("/proc", 0); err != nil {
+		return errors.WithStack(err)
+	}
+	if err := os.Remove("/proc"); err != nil {
+		return errors.WithStack(err)
 	}
 
 	if err := TmpFS("/overlay"); err != nil {
@@ -61,5 +70,5 @@ func Root() error {
 		return errors.WithStack(err)
 	}
 
-	return nil
+	return errors.WithStack(ProcFS("/proc"))
 }
