@@ -3,13 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 
-	"github.com/pkg/errors"
-	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
 
+	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/mount"
 	"github.com/outofforest/cloudless/pkg/system"
@@ -28,7 +26,7 @@ func main() {
 
 		fmt.Println("I am outofforest init process!")
 
-		if err := mount.ProcFS("/proc"); err != nil {
+		if err := mount.Root(); err != nil {
 			return err
 		}
 
@@ -36,39 +34,7 @@ func main() {
 			return err
 		}
 
-		links, err := netlink.LinkList()
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
-		for _, l := range links {
-			if l.Attrs().Name == "lo" {
-				continue
-			}
-
-			if err := netlink.AddrAdd(l, &netlink.Addr{
-				IPNet: &net.IPNet{
-					IP:   net.IPv4(10, 0, 0, 155),
-					Mask: net.IPv4Mask(255, 255, 255, 0),
-				},
-			}); err != nil {
-				return errors.WithStack(err)
-			}
-			if err := netlink.LinkSetUp(l); err != nil {
-				return errors.WithStack(err)
-			}
-			if err := netlink.RouteAdd(&netlink.Route{
-				Scope:     netlink.SCOPE_UNIVERSE,
-				LinkIndex: l.Attrs().Index,
-				Gw:        net.IPv4(10, 0, 0, 1),
-			}); err != nil {
-				return errors.WithStack(err)
-			}
-
-			break
-		}
-
-		if err := mount.Root(); err != nil {
+		if err := host.Configure(config); err != nil {
 			return err
 		}
 
