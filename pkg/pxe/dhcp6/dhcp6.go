@@ -66,6 +66,7 @@ func Run(ctx context.Context) error {
 	fmt.Println("Solicit received")
 
 	var clientUUID []byte
+	var requestedOptions []OptionCode
 	for _, o := range solicitMsg.Options {
 		switch o.OptionCode {
 		case OptionCodeClientID:
@@ -76,13 +77,22 @@ func Run(ctx context.Context) error {
 			copy(clientUUID, o.OptionData)
 		case OptionCodeServerID:
 			return errors.New("unexpected server ID")
+		case OptionORO:
+			if requestedOptions != nil {
+				return errors.New("duplicated oro")
+			}
+			requestedOptions = make([]OptionCode, 0, len(o.OptionData)/2)
+			for len(o.OptionData) > 0 {
+				requestedOptions = append(requestedOptions, OptionCode(binary.BigEndian.Uint16(o.OptionData[:2])))
+				o.OptionData = o.OptionData[2:]
+			}
 		}
 	}
 	if clientUUID == nil {
 		return errors.New("client ID not present")
 	}
 
-	fmt.Println(len(clientUUID))
+	fmt.Println(requestedOptions)
 
 	fmt.Println("Sending advertise")
 
@@ -212,4 +222,5 @@ type OptionCode uint16
 const (
 	OptionCodeClientID OptionCode = 1
 	OptionCodeServerID OptionCode = 2
+	OptionORO                     = 6
 )
