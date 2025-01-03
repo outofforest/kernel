@@ -68,6 +68,7 @@ func Run(ctx context.Context) error {
 	var clientUUID []byte
 	var requestedOptions []OptionCode
 	for _, o := range solicitMsg.Options {
+		fmt.Println(o.OptionCode)
 		switch o.OptionCode {
 		case OptionCodeClientID:
 			if clientUUID != nil {
@@ -96,6 +97,15 @@ func Run(ctx context.Context) error {
 
 	fmt.Println("Sending advertise")
 
+	ianaData := make([]byte, 0, 12+2+2+24)
+	ianaData = binary.BigEndian.AppendUint32(ianaData, 100)
+	ianaData = binary.BigEndian.AppendUint32(ianaData, 3600)
+	ianaData = binary.BigEndian.AppendUint32(ianaData, 3600)
+	ianaData = binary.BigEndian.AppendUint16(ianaData, 0x05)
+	ianaData = binary.BigEndian.AppendUint16(ianaData, 24)
+	ianaData = append(ianaData, net.ParseIP("fe80::cba:4be3:12c0:7475")...)
+	ianaData = binary.BigEndian.AppendUint32(ianaData, 3600)
+	ianaData = binary.BigEndian.AppendUint32(ianaData, 3600)
 	if _, err := conn.WriteTo(serializeMessage(Message{
 		MessageType:   MessageTypeAdvertise,
 		TransactionID: transactionID,
@@ -107,6 +117,14 @@ func Run(ctx context.Context) error {
 			{
 				OptionCode: OptionCodeServerID,
 				OptionData: serverUUID,
+			},
+			{
+				OptionCode: OptionBootfileURL,
+				OptionData: []byte("tftp://[fe80::cba:4be3:12c0:7474]/bootx64.efi"),
+			},
+			{
+				OptionCode: OptionIANA,
+				OptionData: ianaData,
 			},
 		},
 	}, b), addr); err != nil {
@@ -222,5 +240,7 @@ type OptionCode uint16
 const (
 	OptionCodeClientID OptionCode = 1
 	OptionCodeServerID OptionCode = 2
+	OptionIANA         OptionCode = 3
 	OptionORO                     = 6
+	OptionBootfileURL  OptionCode = 59
 )
