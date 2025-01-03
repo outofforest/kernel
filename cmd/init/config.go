@@ -24,4 +24,12 @@ var config = []host.Config{
 			net.IPv4(8, 8, 8, 8),
 		},
 	},
+	{
+		Hostname: "pxe",
+		Networks: []host.Network{
+			{
+				MAC: net.HardwareAddr{0x00, 0x01, 0x0a, 0x00, 0x00, 0x05},
+			},
+		},
+	},
 }
