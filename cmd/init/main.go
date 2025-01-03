@@ -10,7 +10,7 @@ import (
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/mount"
-	"github.com/outofforest/cloudless/pkg/system"
+	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/run"
 )
@@ -20,7 +20,7 @@ func main() {
 		defer func() {
 			if retErr != nil {
 				logger.Get(ctx).Error("Error", zap.Error(retErr))
-				time.Sleep(30 * time.Second)
+				time.Sleep(120 * time.Second)
 			}
 		}()
 
@@ -38,6 +38,8 @@ func main() {
 			return err
 		}
 
-		return system.StartSystemD()
+		return pxe.NewRun("/dev/sda")(ctx)
+
+		// return system.StartSystemD()
 	})
 }
