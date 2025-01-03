@@ -29,6 +29,10 @@ var config = []host.Config{
 		Networks: []host.Network{
 			{
 				MAC: net.HardwareAddr{0x00, 0x01, 0x0a, 0x00, 0x00, 0x05},
+				IP: net.IPNet{
+					IP:   net.ParseIP("fd27:cd4c:c349::1"),
+					Mask: net.CIDRMask(64, 128),
+				},
 			},
 		},
 	},

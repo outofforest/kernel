@@ -10,7 +10,7 @@ import (
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/mount"
-	"github.com/outofforest/cloudless/pkg/system"
+	"github.com/outofforest/cloudless/pkg/pxe/dhcp6"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/run"
 )
@@ -38,6 +38,8 @@ func main() {
 			return err
 		}
 
-		return system.StartSystemD()
+		return dhcp6.Run(ctx)
+
+		// return system.StartSystemD()
 	})
 }
