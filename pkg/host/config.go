@@ -96,14 +96,19 @@ func configureNetworks(networks []Network) error {
 		return errors.WithStack(err)
 	}
 
-	for _, l := range links {
-		hwAddr := l.Attrs().HardwareAddr
-		for _, nc := range networks {
-			if bytes.Equal(nc.MAC, hwAddr) {
+	for _, nc := range networks {
+		var found bool
+		for _, l := range links {
+			if bytes.Equal(nc.MAC, l.Attrs().HardwareAddr) {
 				if err := configureNetwork(nc, l); err != nil {
 					return err
 				}
+				found = true
+				break
 			}
+		}
+		if !found {
+			return errors.Errorf("link %s not found", nc.MAC)
 		}
 	}
 

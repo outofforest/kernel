@@ -14,32 +14,43 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const basePath = "/usr/lib/modules"
+const (
+	basePath    = "/usr/lib/modules"
+	fileBuiltIn = "modules.builtin"
+	fileDeps    = "modules.dep"
+	fileAliases = "modules.alias"
+	fileLoaded  = "/proc/modules"
+)
 
 // LoadModule loads kernel module.
-func LoadModule(realModule string) error {
-	realModule, err := resolveModuleAlias(realModule)
+func LoadModule(module string) error {
+	release, err := Release()
 	if err != nil {
 		return err
 	}
 
-	if isBuiltIn, err := isBuiltInModule(realModule); err != nil || isBuiltIn {
-		return err
-	}
-
-	modulePath, err := resolveModulePath(realModule)
+	module, err = resolveModuleAlias(module, filepath.Join(basePath, release, fileAliases))
 	if err != nil {
 		return err
 	}
 
-	modulesToLoad, err := findModulesToLoad(modulePath)
+	if isBuiltIn, err := isBuiltInModule(module, filepath.Join(basePath, release, fileBuiltIn)); err != nil || isBuiltIn {
+		return err
+	}
+
+	modulePath, err := resolveModulePath(module)
+	if err != nil {
+		return err
+	}
+
+	modulesToLoad, err := findModulesToLoad(modulePath, filepath.Join(basePath, release, fileDeps))
 	if err != nil {
 		return err
 	}
 
 	for i := len(modulesToLoad) - 1; i >= 0; i-- {
 		m := modulesToLoad[i]
-		loaded, err := isLoaded(m)
+		loaded, err := isLoaded(m, fileLoaded)
 		if err != nil {
 			return err
 		}
@@ -55,13 +66,8 @@ func LoadModule(realModule string) error {
 	return nil
 }
 
-func resolveModuleAlias(module string) (string, error) {
-	release, err := Release()
-	if err != nil {
-		return "", err
-	}
-
-	aliasF, err := os.Open(filepath.Join(basePath, release, "modules.alias"))
+func resolveModuleAlias(module string, fileAliases string) (string, error) {
+	aliasF, err := os.Open(fileAliases)
 	if err != nil {
 		return "", errors.WithStack(err)
 	}
@@ -98,13 +104,8 @@ func resolveModuleAlias(module string) (string, error) {
 	}
 }
 
-func isBuiltInModule(module string) (bool, error) {
-	release, err := Release()
-	if err != nil {
-		return false, err
-	}
-
-	builtInF, err := os.Open(filepath.Join(basePath, release, "modules.builtin"))
+func isBuiltInModule(module string, fileBuiltIn string) (bool, error) {
+	builtInF, err := os.Open(fileBuiltIn)
 	if err != nil {
 		return false, errors.WithStack(err)
 	}
@@ -154,15 +155,10 @@ func resolveModulePath(module string) (string, error) {
 	return strings.TrimPrefix(modulePath, baseDir+"/"), nil
 }
 
-func findModulesToLoad(modulePath string) ([]string, error) {
+func findModulesToLoad(modulePath string, fileDeps string) ([]string, error) {
 	modulesToLoad := []string{modulePath}
 
-	release, err := Release()
-	if err != nil {
-		return nil, err
-	}
-
-	depF, err := os.Open(filepath.Join(basePath, release, "modules.dep"))
+	depF, err := os.Open(fileDeps)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -196,9 +192,9 @@ func findModulesToLoad(modulePath string) ([]string, error) {
 	}
 }
 
-func isLoaded(modulePath string) (bool, error) {
+func isLoaded(modulePath string, fileLoaded string) (bool, error) {
 	module := strings.TrimSuffix(filepath.Base(modulePath), ".ko.xz")
-	modulesF, err := os.Open("/proc/modules")
+	modulesF, err := os.Open(fileLoaded)
 	if err != nil {
 		return false, errors.WithStack(err)
 	}
