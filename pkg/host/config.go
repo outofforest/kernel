@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
@@ -29,6 +30,10 @@ type Network struct {
 
 // Configure configures host.
 func Configure(config []Config) error {
+	if err := configureIPv6(); err != nil {
+		return err
+	}
+
 	links, err := netlink.LinkList()
 	if err != nil {
 		return errors.WithStack(err)
@@ -116,6 +121,21 @@ func configureNetworks(networks []Network) error {
 }
 
 func configureNetwork(nc Network, l netlink.Link) error {
+	lName := l.Attrs().Name
+	if err := configureIPv6OnInterface(lName); err != nil {
+		return err
+	}
+
+	if nc.IP.IP == nil || nc.IP.IP.To4() != nil {
+		if err := setSysctl(filepath.Join("net/ipv6/conf", lName, "disable_ipv6"), "1"); err != nil {
+			return err
+		}
+	}
+
+	if nc.IP.IP == nil {
+		return nil
+	}
+
 	if err := netlink.AddrAdd(l, &netlink.Addr{
 		IPNet: &nc.IP,
 	}); err != nil {
@@ -135,4 +155,40 @@ func configureNetwork(nc Network, l netlink.Link) error {
 	}
 
 	return nil
+}
+
+func configureIPv6OnInterface(lName string) error {
+	if err := setSysctl(filepath.Join("net/ipv6/conf", lName, "autoconf"), "0"); err != nil {
+		return err
+	}
+	if err := setSysctl(filepath.Join("net/ipv6/conf", lName, "accept_ra"), "0"); err != nil {
+		return err
+	}
+	return setSysctl(filepath.Join("net/ipv6/conf", lName, "addr_gen_mode"), "1")
+}
+
+func configureIPv6() error {
+	if err := setSysctl("net/ipv6/conf/lo/disable_ipv6", "1"); err != nil {
+		return err
+	}
+	if err := setSysctl("net/ipv6/conf/default/addr_gen_mode", "1"); err != nil {
+		return err
+	}
+	if err := setSysctl("net/ipv6/conf/default/autoconf", "0"); err != nil {
+		return err
+	}
+	if err := setSysctl("net/ipv6/conf/default/accept_ra", "0"); err != nil {
+		return err
+	}
+	if err := setSysctl("net/ipv6/conf/all/addr_gen_mode", "1"); err != nil {
+		return err
+	}
+	if err := setSysctl("net/ipv6/conf/all/autoconf", "0"); err != nil {
+		return err
+	}
+	return setSysctl("net/ipv6/conf/all/accept_ra", "0")
+}
+
+func setSysctl(path string, value string) error {
+	return errors.WithStack(os.WriteFile(filepath.Join("/proc/sys", path), []byte(value), 0o644))
 }
