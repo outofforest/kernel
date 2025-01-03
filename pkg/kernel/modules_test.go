@@ -26,7 +26,7 @@ func TestBuiltInModule(t *testing.T) {
 func TestResolveModulePath(t *testing.T) {
 	requireT := require.New(t)
 
-	modulePath, err := resolveModulePath("overlay")
+	modulePath, err := resolveModulePath("overlay", "test")
 	requireT.NoError(err)
 	requireT.Equal("kernel/fs/overlayfs/overlay.ko.xz", modulePath)
 }
@@ -54,15 +54,15 @@ func TestFindModulesToLoad(t *testing.T) {
 func TestIsLoaded(t *testing.T) {
 	requireT := require.New(t)
 
-	loaded, err := isLoaded("kernel/fs/overlayfs/overlay.ko.xz", "test/procmodules")
+	loaded, err := isLoaded("kernel/fs/overlayfs/overlay.ko.xz", "test/proc/modules")
 	requireT.NoError(err)
 	requireT.False(loaded)
 
-	loaded, err = isLoaded("rfkill.ko.xz", "test/procmodules")
+	loaded, err = isLoaded("rfkill.ko.xz", "test/proc/modules")
 	requireT.NoError(err)
 	requireT.True(loaded)
 
-	loaded, err = isLoaded("nonexistingmodule.ko.xz", "test/procmodules")
+	loaded, err = isLoaded("nonexistingmodule.ko.xz", "test/proc/modules")
 	requireT.NoError(err)
 	requireT.False(loaded)
 }

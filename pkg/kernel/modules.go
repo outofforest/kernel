@@ -29,21 +29,22 @@ func LoadModule(module string) error {
 		return err
 	}
 
-	module, err = resolveModuleAlias(module, filepath.Join(basePath, release, fileAliases))
+	releaseBase := filepath.Join(basePath, release)
+	module, err = resolveModuleAlias(module, filepath.Join(releaseBase, fileAliases))
 	if err != nil {
 		return err
 	}
 
-	if isBuiltIn, err := isBuiltInModule(module, filepath.Join(basePath, release, fileBuiltIn)); err != nil || isBuiltIn {
+	if isBuiltIn, err := isBuiltInModule(module, filepath.Join(releaseBase, fileBuiltIn)); err != nil || isBuiltIn {
 		return err
 	}
 
-	modulePath, err := resolveModulePath(module)
+	modulePath, err := resolveModulePath(module, releaseBase)
 	if err != nil {
 		return err
 	}
 
-	modulesToLoad, err := findModulesToLoad(modulePath, filepath.Join(basePath, release, fileDeps))
+	modulesToLoad, err := findModulesToLoad(modulePath, filepath.Join(releaseBase, fileDeps))
 	if err != nil {
 		return err
 	}
@@ -129,16 +130,10 @@ func isBuiltInModule(module string, fileBuiltIn string) (bool, error) {
 	}
 }
 
-func resolveModulePath(module string) (string, error) {
-	release, err := Release()
-	if err != nil {
-		return "", err
-	}
-
+func resolveModulePath(module string, baseDir string) (string, error) {
 	expectedFile := module + ".ko.xz"
-	baseDir := filepath.Join(basePath, release)
 	var modulePath string
-	if err := filepath.WalkDir(filepath.Join(basePath, release), func(path string, d fs.DirEntry, err error) error {
+	if err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
 		if filepath.Base(path) == expectedFile {
 			modulePath = path
 			return filepath.SkipAll
