@@ -3,6 +3,7 @@ package main
 import (
 	"net"
 
+	"github.com/outofforest/cloudless/pkg/acpi"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/cloudless/pkg/systemd"
@@ -50,6 +51,7 @@ var config = []host.Config{
 			},
 		},
 		Services: []host.Service{
+			acpi.NewPowerService(),
 			pxe.NewService("/dev/sda"),
 		},
 	},

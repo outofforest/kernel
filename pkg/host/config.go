@@ -7,12 +7,21 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
 
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/parallel"
+)
+
+var (
+	// ErrPowerOff means that host should be powered off.
+	ErrPowerOff = errors.New("power off requested")
+
+	// ErrReboot means that host should be rebooted.
+	ErrReboot = errors.New("reboot requested")
 )
 
 // Config contains host configuration.
@@ -77,7 +86,15 @@ func runHost(ctx context.Context, hc Config) error {
 		return err
 	}
 
-	return runServices(ctx, hc.Services)
+	err := runServices(ctx, hc.Services)
+	switch {
+	case errors.Is(err, ErrPowerOff):
+		return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF))
+	case errors.Is(err, ErrReboot):
+		return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART))
+	default:
+		return err
+	}
 }
 
 func configureKernelModules(modules []string) error {
