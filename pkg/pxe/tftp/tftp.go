@@ -132,7 +132,7 @@ func runServer(ctx context.Context, efiData []byte) error {
 
 					for i := range windowSize {
 						start := (ro*(math.MaxUint16+uint64(1)) + block + i) * blockSize
-						if start >= efiDataLen {
+						if start > efiDataLen {
 							clearRollOver(addr.(*net.UDPAddr).IP, rollOver1, rollOver2)
 							continue loop
 						}
