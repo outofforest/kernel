@@ -6,6 +6,8 @@ require (
 	github.com/cespare/xxhash v1.1.0
 	github.com/diskfs/go-diskfs v1.5.0
 	github.com/google/uuid v1.6.0
+	github.com/mdlayher/genetlink v1.3.2
+	github.com/mdlayher/netlink v1.7.2
 	github.com/outofforest/logger v0.5.5
 	github.com/outofforest/parallel v0.2.3
 	github.com/outofforest/run v0.8.0
@@ -25,8 +27,6 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
-	github.com/mdlayher/genetlink v1.3.2 // indirect
-	github.com/mdlayher/netlink v1.7.2 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/outofforest/ioc/v2 v2.5.2 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
