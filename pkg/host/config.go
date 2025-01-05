@@ -31,6 +31,7 @@ type Network struct {
 	Gateway net.IP
 }
 
+// Service contains service configuration.
 type Service struct {
 	Name   string
 	OnExit parallel.OnExit
