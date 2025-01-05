@@ -24,7 +24,7 @@ type Config struct {
 // Network contains network configuration.
 type Network struct {
 	MAC     net.HardwareAddr
-	IP      net.IPNet
+	IPs     []net.IPNet
 	Gateway net.IP
 }
 
@@ -126,24 +126,22 @@ func configureNetwork(nc Network, l netlink.Link) error {
 		return err
 	}
 
-	if nc.IP.IP == nil || nc.IP.IP.To4() != nil {
-		if err := setSysctl(filepath.Join("net/ipv6/conf", lName, "disable_ipv6"), "1"); err != nil {
-			return err
+	var ip6Found bool
+	for _, ip := range nc.IPs {
+		if ip.IP.To4() == nil {
+			ip6Found = true
+		}
+
+		if err := netlink.AddrAdd(l, &netlink.Addr{
+			IPNet: &ip,
+		}); err != nil {
+			return errors.WithStack(err)
+		}
+		if err := netlink.LinkSetUp(l); err != nil {
+			return errors.WithStack(err)
 		}
 	}
 
-	if nc.IP.IP == nil {
-		return nil
-	}
-
-	if err := netlink.AddrAdd(l, &netlink.Addr{
-		IPNet: &nc.IP,
-	}); err != nil {
-		return errors.WithStack(err)
-	}
-	if err := netlink.LinkSetUp(l); err != nil {
-		return errors.WithStack(err)
-	}
 	if nc.Gateway != nil {
 		if err := netlink.RouteAdd(&netlink.Route{
 			Scope:     netlink.SCOPE_UNIVERSE,
@@ -151,6 +149,12 @@ func configureNetwork(nc Network, l netlink.Link) error {
 			Gw:        nc.Gateway,
 		}); err != nil {
 			return errors.WithStack(err)
+		}
+	}
+
+	if !ip6Found {
+		if err := setSysctl(filepath.Join("net/ipv6/conf", lName, "disable_ipv6"), "1"); err != nil {
+			return err
 		}
 	}
 

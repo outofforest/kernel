@@ -2,7 +2,6 @@ package kernel
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -228,8 +227,6 @@ func isLoaded(modulePath string, fileLoaded string) (bool, error) {
 }
 
 func loadModule(modulePath string) error {
-	fmt.Println(modulePath)
-
 	release, err := Release()
 	if err != nil {
 		return err
