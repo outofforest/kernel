@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	run.New().Run(context.Background(), "init", func(ctx context.Context) (retErr error) {
+	run.New().Run(context.Background(), "cloudless", func(ctx context.Context) (retErr error) {
 		defer func() {
 			if retErr != nil {
 				logger.Get(ctx).Error("Error", zap.Error(retErr))
@@ -23,7 +23,7 @@ func main() {
 			}
 		}()
 
-		fmt.Println("I am outofforest init process!")
+		fmt.Println("I am cloudless init process.")
 
 		if err := mount.Root(); err != nil {
 			return err

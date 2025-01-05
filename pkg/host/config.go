@@ -11,9 +11,11 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
+	"go.uber.org/zap"
 
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/systemd"
+	"github.com/outofforest/logger"
 	"github.com/outofforest/parallel"
 )
 
@@ -74,6 +76,8 @@ func Run(ctx context.Context, config []Config) error {
 }
 
 func runHost(ctx context.Context, hc Config) error {
+	ctx = logger.With(ctx, zap.String("host", hc.Hostname))
+
 	if err := configureHostname(hc.Hostname); err != nil {
 		return err
 	}
