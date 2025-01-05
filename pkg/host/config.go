@@ -13,6 +13,7 @@ import (
 	"github.com/vishvananda/netlink"
 
 	"github.com/outofforest/cloudless/pkg/kernel"
+	"github.com/outofforest/cloudless/pkg/systemd"
 	"github.com/outofforest/parallel"
 )
 
@@ -231,15 +232,20 @@ func setSysctl(path string, value string) error {
 func runServices(ctx context.Context, services []Service) error {
 	switch len(services) {
 	case 0:
-		return errors.New("no services configured")
 	case 1:
-		return services[0].TaskFn(ctx)
+		if err := services[0].TaskFn(ctx); err != nil {
+			return err
+		}
 	default:
-		return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+		if err := parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 			for _, s := range services {
 				spawn("service:"+s.Name, s.OnExit, s.TaskFn)
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
 	}
+
+	return systemd.Start()
 }

@@ -3,6 +3,7 @@ module github.com/outofforest/cloudless
 go 1.23
 
 require (
+	github.com/beevik/ntp v1.4.3
 	github.com/cespare/xxhash v1.1.0
 	github.com/diskfs/go-diskfs v1.5.0
 	github.com/google/uuid v1.6.0
@@ -12,7 +13,7 @@ require (
 	github.com/outofforest/parallel v0.2.3
 	github.com/outofforest/run v0.8.0
 	github.com/pkg/errors v0.9.1
-	github.com/stretchr/testify v1.8.1
+	github.com/stretchr/testify v1.9.0
 	github.com/ulikunitz/xz v0.5.12
 	github.com/vishvananda/netlink v1.3.0
 	go.uber.org/zap v1.27.0
