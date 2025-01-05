@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/cespare/xxhash v1.1.0
+	github.com/diskfs/go-diskfs v1.5.0
 	github.com/google/uuid v1.6.0
 	github.com/outofforest/logger v0.5.5
 	github.com/outofforest/parallel v0.2.3
@@ -19,7 +20,6 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/diskfs/go-diskfs v1.5.0 // indirect
 	github.com/djherbis/times v1.6.0 // indirect
 	github.com/elliotwutingfeng/asciiset v0.0.0-20240214025120-24af97c84155 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
