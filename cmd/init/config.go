@@ -4,6 +4,8 @@ import (
 	"net"
 
 	"github.com/outofforest/cloudless/pkg/host"
+	"github.com/outofforest/cloudless/pkg/pxe"
+	"github.com/outofforest/cloudless/pkg/systemd"
 )
 
 var config = []host.Config{
@@ -25,6 +27,9 @@ var config = []host.Config{
 			net.IPv4(1, 1, 1, 1),
 			net.IPv4(8, 8, 8, 8),
 		},
+		Services: []host.Service{
+			systemd.NewService(),
+		},
 	},
 	{
 		Hostname:      "pxe",
@@ -43,6 +48,9 @@ var config = []host.Config{
 					},
 				},
 			},
+		},
+		Services: []host.Service{
+			pxe.NewService("/dev/sda"),
 		},
 	},
 }
