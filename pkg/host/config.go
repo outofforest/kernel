@@ -2,6 +2,7 @@ package host
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/vishvananda/netlink"
 
 	"github.com/outofforest/cloudless/pkg/kernel"
+	"github.com/outofforest/parallel"
 )
 
 // Config contains host configuration.
@@ -19,6 +21,7 @@ type Config struct {
 	KernelModules []string
 	Networks      []Network
 	DNS           []net.IP
+	Services      []Service
 }
 
 // Network contains network configuration.
@@ -28,8 +31,14 @@ type Network struct {
 	Gateway net.IP
 }
 
-// Configure configures host.
-func Configure(config []Config) error {
+type Service struct {
+	Name   string
+	OnExit parallel.OnExit
+	TaskFn parallel.Task
+}
+
+// Run runs host system.
+func Run(ctx context.Context, config []Config) error {
 	if err := configureIPv6(); err != nil {
 		return err
 	}
@@ -44,7 +53,7 @@ func Configure(config []Config) error {
 		for _, hc := range config {
 			for _, n := range hc.Networks {
 				if bytes.Equal(n.MAC, hwAddr) {
-					return configureHost(hc)
+					return runHost(ctx, hc)
 				}
 			}
 		}
@@ -53,7 +62,7 @@ func Configure(config []Config) error {
 	return errors.Errorf("no matching link found")
 }
 
-func configureHost(hc Config) error {
+func runHost(ctx context.Context, hc Config) error {
 	if err := configureHostname(hc.Hostname); err != nil {
 		return err
 	}
@@ -63,7 +72,11 @@ func configureHost(hc Config) error {
 	if err := configureDNS(hc.DNS); err != nil {
 		return err
 	}
-	return configureNetworks(hc.Networks)
+	if err := configureNetworks(hc.Networks); err != nil {
+		return err
+	}
+
+	return runServices(ctx, hc.Services)
 }
 
 func configureKernelModules(modules []string) error {
@@ -195,4 +208,20 @@ func configureIPv6() error {
 
 func setSysctl(path string, value string) error {
 	return errors.WithStack(os.WriteFile(filepath.Join("/proc/sys", path), []byte(value), 0o644))
+}
+
+func runServices(ctx context.Context, services []Service) error {
+	switch len(services) {
+	case 0:
+		return errors.New("no services configured")
+	case 1:
+		return services[0].TaskFn(ctx)
+	default:
+		return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+			for _, s := range services {
+				spawn("service:"+s.Name, s.OnExit, s.TaskFn)
+			}
+			return nil
+		})
+	}
 }

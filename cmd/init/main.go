@@ -10,7 +10,6 @@ import (
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/mount"
-	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/run"
 )
@@ -34,12 +33,6 @@ func main() {
 			return err
 		}
 
-		if err := host.Configure(config); err != nil {
-			return err
-		}
-
-		return pxe.NewRun("/dev/sda")(ctx)
-
-		// return system.StartSystemD()
+		return host.Run(ctx, config)
 	})
 }
