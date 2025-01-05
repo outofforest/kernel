@@ -18,7 +18,7 @@ const (
 	acpiGenlMcastGroupName = "acpi_mc_group"
 )
 
-// NewPowerService creats new ACPI service for powering off and rebooting the host.
+// NewPowerService creates new ACPI service for powering off and rebooting the host.
 func NewPowerService() host.Service {
 	return host.Service{
 		Name:   "acpi-power",
