@@ -18,6 +18,9 @@ import (
 	"github.com/outofforest/parallel"
 )
 
+// Port is the port tftp server listens on.
+const Port = 69
+
 // NewRun returns Run function of TFTP server.
 func NewRun(efiDevPath string) parallel.Task {
 	return func(ctx context.Context) error {
@@ -153,11 +156,9 @@ func runServer(ctx context.Context, efiData []byte) error {
 }
 
 func newListener() (*net.UDPConn, error) {
-	const tftp6ServerPort = 69
-
 	conn, err := net.ListenUDP("udp6", &net.UDPAddr{
 		IP:   net.IPv6zero,
-		Port: tftp6ServerPort,
+		Port: Port,
 	})
 	if err != nil {
 		return nil, errors.WithStack(err)

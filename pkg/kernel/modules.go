@@ -129,6 +129,7 @@ func isBuiltInModule(module string, fileBuiltIn string) (bool, error) {
 	}
 }
 
+// FIXME (wojciech): Path might be determined by looking at modules.dep.
 func resolveModulePath(module string, baseDir string) (string, error) {
 	expectedFile := module + ".ko.xz"
 	var modulePath string
