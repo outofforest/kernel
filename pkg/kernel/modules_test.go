@@ -23,18 +23,10 @@ func TestBuiltInModule(t *testing.T) {
 	requireT.True(isBuiltIn)
 }
 
-func TestResolveModulePath(t *testing.T) {
-	requireT := require.New(t)
-
-	modulePath, err := resolveModulePath("overlay", "test")
-	requireT.NoError(err)
-	requireT.Equal("kernel/fs/overlayfs/overlay.ko.xz", modulePath)
-}
-
 func TestFindModulesToLoad(t *testing.T) {
 	requireT := require.New(t)
 
-	modulesToLoad, err := findModulesToLoad("kernel/drivers/net/virtio_net.ko.xz",
+	modulesToLoad, err := findModulesToLoad("virtio_net",
 		filepath.Join("test", fileDeps))
 	requireT.NoError(err)
 	requireT.Equal([]string{
@@ -43,7 +35,7 @@ func TestFindModulesToLoad(t *testing.T) {
 		"kernel/net/core/failover.ko.xz",
 	}, modulesToLoad)
 
-	modulesToLoad, err = findModulesToLoad("kernel/fs/overlayfs/overlay.ko.xz",
+	modulesToLoad, err = findModulesToLoad("overlay",
 		filepath.Join("test", fileDeps))
 	requireT.NoError(err)
 	requireT.Equal([]string{
