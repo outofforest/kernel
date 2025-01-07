@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/google/nftables"
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
 
+	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/systemd"
 	"github.com/outofforest/logger"
@@ -33,6 +35,7 @@ type Config struct {
 	KernelModules []string
 	Networks      []Network
 	DNS           []net.IP
+	Firewall      []firewall.RuleSource
 	Services      []Service
 }
 
@@ -88,6 +91,9 @@ func runHost(ctx context.Context, hc Config) error {
 		return err
 	}
 	if err := configureDNS(hc.DNS); err != nil {
+		return err
+	}
+	if err := configureFirewall(hc.Firewall); err != nil {
 		return err
 	}
 	if err := configureNetworks(hc.Networks); err != nil {
@@ -281,4 +287,18 @@ func configureEnv(hostname string) error {
 	}
 
 	return nil
+}
+
+func configureFirewall(sources []firewall.RuleSource) error {
+	c := &nftables.Conn{}
+	chains := firewall.EnsureChains(c)
+
+	for _, s := range sources {
+		for _, r := range s(chains) {
+			r.Table = r.Chain.Table
+			c.AddRule(r)
+		}
+	}
+
+	return errors.WithStack(c.Flush())
 }
