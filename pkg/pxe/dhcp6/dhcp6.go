@@ -19,6 +19,13 @@ import (
 
 // tcpdump -i enp9s0 -n -vv '(udp port 546 or 547) or icmp6'
 
+const (
+	// Port is the port dhcp6 server listens on.
+	Port = 547
+
+	dhcpMulticastGroup = "ff02::1:2"
+)
+
 // Run runs DHCP IPv6 server giving random IP addresses required to send EFI payload later.
 func Run(ctx context.Context) error {
 	for {
@@ -235,14 +242,9 @@ func newDUID() ([]byte, error) {
 }
 
 func newListener() (*net.UDPConn, map[string]*net.IPNet, error) {
-	const (
-		dhcpMulticastGroup = "ff02::1:2"
-		dhcp6ServerPort    = 547
-	)
-
 	conn, err := net.ListenUDP("udp6", &net.UDPAddr{
 		IP:   net.IPv6zero,
-		Port: dhcp6ServerPort,
+		Port: Port,
 	})
 	if err != nil {
 		return nil, nil, errors.WithStack(err)
@@ -269,7 +271,7 @@ func newListener() (*net.UDPConn, map[string]*net.IPNet, error) {
 
 			if err := pConn.JoinGroup(&iface, &net.UDPAddr{
 				IP:   net.ParseIP(dhcpMulticastGroup),
-				Port: dhcp6ServerPort,
+				Port: Port,
 			}); err != nil {
 				return nil, nil, errors.WithStack(err)
 			}

@@ -25,6 +25,22 @@ func DevFS(dir string) error {
 	return errors.WithStack(syscall.Mount("none", dir, "devtmpfs", 0, ""))
 }
 
+// DevPtsFS mounts devpts.
+func DevPtsFS(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(syscall.Mount("none", dir, "devpts", 0, ""))
+}
+
+// SysFS mounts sysfs.
+func SysFS(dir string) error {
+	if err := os.MkdirAll(dir, 0o555); err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(syscall.Mount("none", dir, "sysfs", 0, ""))
+}
+
 // TmpFS mounts tmpfs.
 func TmpFS(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -81,5 +97,11 @@ func Root() error {
 	if err := ProcFS("/proc"); err != nil {
 		return err
 	}
-	return DevFS("/dev")
+	if err := SysFS("/sys"); err != nil {
+		return err
+	}
+	if err := DevFS("/dev"); err != nil {
+		return err
+	}
+	return DevPtsFS("/dev/pts")
 }

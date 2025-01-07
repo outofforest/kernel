@@ -78,6 +78,9 @@ func Run(ctx context.Context, config []Config) error {
 func runHost(ctx context.Context, hc Config) error {
 	ctx = logger.With(ctx, zap.String("host", hc.Hostname))
 
+	if err := configureEnv(hc.Hostname); err != nil {
+		return err
+	}
 	if err := configureHostname(hc.Hostname); err != nil {
 		return err
 	}
@@ -243,7 +246,14 @@ func runServices(ctx context.Context, services []Service) error {
 	default:
 		if err := parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 			for _, s := range services {
-				spawn("service:"+s.Name, s.OnExit, s.TaskFn)
+				spawn("service:"+s.Name, s.OnExit, func(ctx context.Context) error {
+					log := logger.Get(ctx).With(zap.String("service", s.Name))
+
+					log.Info("Starting service")
+					defer log.Info("Service stopped")
+
+					return s.TaskFn(ctx)
+				})
 			}
 			return nil
 		}); err != nil {
@@ -252,4 +262,23 @@ func runServices(ctx context.Context, services []Service) error {
 	}
 
 	return systemd.Start()
+}
+
+func configureEnv(hostname string) error {
+	if err := syscall.Sethostname([]byte(hostname)); err != nil {
+		return errors.WithStack(err)
+	}
+
+	for k, v := range map[string]string{
+		"PATH":     "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin",
+		"HOME":     "/root",
+		"USER":     "root",
+		"HOSTNAME": hostname,
+	} {
+		if err := os.Setenv(k, v); err != nil {
+			return errors.WithStack(err)
+		}
+	}
+
+	return nil
 }

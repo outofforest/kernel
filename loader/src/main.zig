@@ -10,7 +10,7 @@ pub fn main() uefi.Status {
     con_out = uefi.system_table.con_out.?;
     boot_services = uefi.system_table.boot_services.?;
 
-    log("I am cloudless bootloeader.");
+    log("I am cloudless bootloader.");
 
     var initramfs_handle: ?uefi.Handle = null;
     var ret = boot_services.installMultipleProtocolInterfaces(

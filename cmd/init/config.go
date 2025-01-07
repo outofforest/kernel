@@ -7,6 +7,7 @@ import (
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/ntp"
 	"github.com/outofforest/cloudless/pkg/pxe"
+	"github.com/outofforest/cloudless/pkg/ssh"
 )
 
 var config = []host.Config{
@@ -59,6 +60,7 @@ var config = []host.Config{
 		Services: []host.Service{
 			acpi.NewPowerService(),
 			ntp.NewService(),
+			ssh.NewService("AAAAC3NzaC1lZDI1NTE5AAAAIEcJvvtOBgTsm3mq3Sg8cjn6Mz/vC9f3k6a89ZOjIyF6"),
 			pxe.NewService("/dev/sda"),
 		},
 	},

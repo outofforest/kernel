@@ -9,6 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
+	github.com/outofforest/libexec v0.3.9
 	github.com/outofforest/logger v0.5.5
 	github.com/outofforest/parallel v0.2.3
 	github.com/outofforest/run v0.8.0
@@ -17,6 +18,7 @@ require (
 	github.com/ulikunitz/xz v0.5.12
 	github.com/vishvananda/netlink v1.3.0
 	go.uber.org/zap v1.27.0
+	golang.org/x/crypto v0.31.0
 	golang.org/x/net v0.33.0
 	golang.org/x/sys v0.29.0
 )
