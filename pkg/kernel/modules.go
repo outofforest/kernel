@@ -3,7 +3,6 @@ package kernel
 import (
 	"bufio"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,12 +37,7 @@ func LoadModule(module string) error {
 		return err
 	}
 
-	modulePath, err := resolveModulePath(module, releaseBase)
-	if err != nil {
-		return err
-	}
-
-	modulesToLoad, err := findModulesToLoad(modulePath, filepath.Join(releaseBase, fileDeps))
+	modulesToLoad, err := findModulesToLoad(module, filepath.Join(releaseBase, fileDeps))
 	if err != nil {
 		return err
 	}
@@ -129,30 +123,7 @@ func isBuiltInModule(module string, fileBuiltIn string) (bool, error) {
 	}
 }
 
-// FIXME (wojciech): Path might be determined by looking at modules.dep.
-func resolveModulePath(module string, baseDir string) (string, error) {
-	expectedFile := module + ".ko.xz"
-	var modulePath string
-	if err := filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
-		if filepath.Base(path) == expectedFile {
-			modulePath = path
-			return filepath.SkipAll
-		}
-		return nil
-	}); err != nil {
-		return "", err
-	}
-
-	if modulePath == "" {
-		return "", errors.Errorf("module %q not found", module)
-	}
-
-	return strings.TrimPrefix(modulePath, baseDir+"/"), nil
-}
-
-func findModulesToLoad(modulePath string, fileDeps string) ([]string, error) {
-	modulesToLoad := []string{modulePath}
-
+func findModulesToLoad(module string, fileDeps string) ([]string, error) {
 	depF, err := os.Open(fileDeps)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -165,22 +136,33 @@ func findModulesToLoad(modulePath string, fileDeps string) ([]string, error) {
 		switch {
 		case err == nil:
 		case errors.Is(err, io.EOF):
-			return modulesToLoad, nil
+			return nil, errors.Errorf("module %q not found", module)
 		default:
 			return nil, errors.WithStack(err)
 		}
 
-		spaceIndex := strings.Index(line, " ")
-		if spaceIndex < 0 {
+		dotIndex := strings.Index(line, ".")
+		if dotIndex < 0 {
 			continue
 		}
 
-		if line[:spaceIndex-1] != modulePath {
+		if filepath.Base(line[:dotIndex]) != module {
 			continue
 		}
 
-		for _, m := range strings.Split(line[spaceIndex+1:], " ") {
-			modulesToLoad = append(modulesToLoad, strings.TrimSpace(m))
+		colonIndex := strings.Index(line, ":")
+		if colonIndex < 0 {
+			continue
+		}
+
+		modulesToLoad := []string{
+			line[:colonIndex],
+		}
+
+		if deps := strings.TrimSpace(line[colonIndex+1:]); deps != "" {
+			for _, m := range strings.Split(deps, " ") {
+				modulesToLoad = append(modulesToLoad, strings.TrimSpace(m))
+			}
 		}
 
 		return modulesToLoad, nil
