@@ -5,8 +5,11 @@ import (
 
 	"github.com/outofforest/cloudless/pkg/acpi"
 	"github.com/outofforest/cloudless/pkg/host"
+	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/ntp"
 	"github.com/outofforest/cloudless/pkg/pxe"
+	"github.com/outofforest/cloudless/pkg/pxe/dhcp6"
+	"github.com/outofforest/cloudless/pkg/pxe/tftp"
 	"github.com/outofforest/cloudless/pkg/ssh"
 )
 
@@ -28,6 +31,9 @@ var config = []host.Config{
 		DNS: []net.IP{
 			net.IPv4(1, 1, 1, 1),
 			net.IPv4(8, 8, 8, 8),
+		},
+		Firewall: []firewall.RuleSource{
+			firewall.AllowICMPv4(),
 		},
 	},
 	{
@@ -56,6 +62,13 @@ var config = []host.Config{
 		DNS: []net.IP{
 			net.IPv4(1, 1, 1, 1),
 			net.IPv4(8, 8, 8, 8),
+		},
+		Firewall: []firewall.RuleSource{
+			firewall.OpenTCPPort(ssh.Port),
+			firewall.OpenUDPPort(dhcp6.Port),
+			firewall.OpenUDPPort(tftp.Port),
+			firewall.AllowICMPv4(),
+			firewall.AllowICMPv6(),
 		},
 		Services: []host.Service{
 			acpi.NewPowerService(),

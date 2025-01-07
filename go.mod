@@ -6,6 +6,7 @@ require (
 	github.com/beevik/ntp v1.4.3
 	github.com/cespare/xxhash v1.1.0
 	github.com/diskfs/go-diskfs v1.5.0
+	github.com/google/nftables v0.2.0
 	github.com/google/uuid v1.6.0
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
@@ -14,12 +15,13 @@ require (
 	github.com/outofforest/parallel v0.2.3
 	github.com/outofforest/run v0.8.0
 	github.com/pkg/errors v0.9.1
+	github.com/samber/lo v1.47.0
 	github.com/stretchr/testify v1.9.0
 	github.com/ulikunitz/xz v0.5.12
 	github.com/vishvananda/netlink v1.3.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/crypto v0.31.0
-	golang.org/x/net v0.33.0
+	golang.org/x/crypto v0.32.0
+	golang.org/x/net v0.34.0
 	golang.org/x/sys v0.29.0
 )
 
@@ -35,7 +37,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pkg/xattr v0.4.10 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/samber/lo v1.47.0 // indirect
 	github.com/sirupsen/logrus v1.9.4-0.20230606125235-dd1b4c2e81af // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
