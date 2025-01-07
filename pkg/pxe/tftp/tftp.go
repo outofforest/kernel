@@ -18,8 +18,15 @@ import (
 	"github.com/outofforest/parallel"
 )
 
-// Port is the port tftp server listens on.
-const Port = 69
+const (
+	// Port is the port tftp server listens on.
+	Port = 69
+
+	bufferSize        = 4096
+	defaultBlockSize  = 512
+	maxBlockSize      = bufferSize - 4
+	defaultWindowSize = 1
+)
 
 // NewRun returns Run function of TFTP server.
 func NewRun(efiDevPath string) parallel.Task {
@@ -56,10 +63,10 @@ func runServer(ctx context.Context, efiData []byte) error {
 			defer conn.Close()
 
 			log := logger.Get(ctx)
-			b := make([]byte, 4096)
+			b := make([]byte, bufferSize)
 
-			var blockSize uint64 = 512
-			var windowSize uint64 = 1
+			var blockSize uint64 = defaultBlockSize
+			var windowSize uint64 = defaultWindowSize
 			efiDataLen := uint64(len(efiData))
 
 			rollOver1 := map[uint64]*rollOver{}
@@ -73,6 +80,10 @@ func runServer(ctx context.Context, efiData []byte) error {
 						return errors.WithStack(ctx.Err())
 					}
 					return errors.WithStack(err)
+				}
+
+				if n < 2 {
+					continue loop
 				}
 
 				opCode := opCode(binary.BigEndian.Uint16(b[:2]))
@@ -92,7 +103,11 @@ func runServer(ctx context.Context, efiData []byte) error {
 					clearRollOver(addr.(*net.UDPAddr).IP, rollOver1, rollOver2)
 
 					if len(rrq.Options) == 0 {
-						if _, err := conn.WriteTo(prepareDataMessage(1, efiData[:blockSize], b), addr); err != nil {
+						end := blockSize
+						if end > efiDataLen {
+							end = efiDataLen
+						}
+						if _, err := conn.WriteTo(prepareDataMessage(1, efiData[:end], b), addr); err != nil {
 							return errors.WithStack(err)
 						}
 
@@ -114,6 +129,9 @@ func runServer(ctx context.Context, efiData []byte) error {
 								log.Error("Parsing block size failed.", zap.Error(err))
 								continue loop
 							}
+							if blockSize > maxBlockSize {
+								blockSize = maxBlockSize
+							}
 							options = append(options, opt)
 						case "windowSize":
 							var err error
@@ -130,6 +148,9 @@ func runServer(ctx context.Context, efiData []byte) error {
 						return errors.WithStack(err)
 					}
 				case ackOpCode:
+					if n < 4 {
+						continue loop
+					}
 					block := uint64(binary.BigEndian.Uint16(b[2:4]))
 					ro := updateRollOver(addr.(*net.UDPAddr).IP, block, &rollOver1, &rollOver2)
 

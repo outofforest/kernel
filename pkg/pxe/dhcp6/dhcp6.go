@@ -24,6 +24,7 @@ const (
 	Port = 547
 
 	dhcpMulticastGroup = "ff02::1:2"
+	bufferSize         = 4096
 )
 
 // Run runs DHCP IPv6 server giving random IP addresses required to send EFI payload later.
@@ -60,18 +61,21 @@ func runServer(ctx context.Context) error {
 				return err
 			}
 
-			b := make([]byte, 4096)
+			b := make([]byte, bufferSize)
 			iaadrOption := newIAADDROption()
 
 		loop:
 			for {
-				msg, addr, err := receiveMessage(conn, b)
+				n, addr, err := conn.ReadFrom(b)
 				if err != nil {
 					if ctx.Err() != nil {
 						return errors.WithStack(ctx.Err())
 					}
 					return errors.WithStack(err)
 				}
+
+				udpAddr := addr.(*net.UDPAddr)
+				msg := parseMessage(b[:n])
 
 				switch msg.MessageType {
 				case messageTypeSolicit:
@@ -116,11 +120,12 @@ func runServer(ctx context.Context) error {
 							},
 							{
 								OptionCode: optionBootfileURL,
-								OptionData: bootloaderURL(scopes[addr.Zone]),
+								OptionData: bootloaderURL(scopes[udpAddr.Zone]),
 							},
 							{
 								OptionCode: optionIANA,
-								OptionData: fillIAADDROption(iaadrOption, iaIAID, clientDUID, serverDUID, scopes[addr.Zone]),
+								OptionData: fillIAADDROption(iaadrOption, iaIAID, clientDUID, serverDUID,
+									scopes[udpAddr.Zone]),
 							},
 						},
 					}, b), addr); err != nil {
@@ -176,11 +181,12 @@ func runServer(ctx context.Context) error {
 							},
 							{
 								OptionCode: optionBootfileURL,
-								OptionData: bootloaderURL(scopes[addr.Zone]),
+								OptionData: bootloaderURL(scopes[udpAddr.Zone]),
 							},
 							{
 								OptionCode: optionIANA,
-								OptionData: fillIAADDROption(iaadrOption, iaIAID, clientDUID, serverDUID, scopes[addr.Zone]),
+								OptionData: fillIAADDROption(iaadrOption, iaIAID, clientDUID, serverDUID,
+									scopes[udpAddr.Zone]),
 							},
 						},
 					}, b), addr); err != nil {
@@ -195,6 +201,9 @@ func runServer(ctx context.Context) error {
 }
 
 func parseMessage(b []byte) message {
+	if len(b) < 4 {
+		return message{}
+	}
 	m := message{
 		MessageType:   messageType(b[0]),
 		TransactionID: transactionID(b[1:4]),
@@ -202,7 +211,13 @@ func parseMessage(b []byte) message {
 
 	b = b[4:]
 	for len(b) > 0 {
+		if len(b) < 4 {
+			return message{}
+		}
 		optionLen := binary.BigEndian.Uint16(b[2:4])
+		if uint16(len(b)) < 4+optionLen {
+			return message{}
+		}
 		m.Options = append(m.Options, option{
 			OptionCode: optionCode(binary.BigEndian.Uint16(b[:2])),
 			OptionData: b[4 : 4+optionLen],
@@ -308,15 +323,6 @@ func fillIAADDROption(iaadrOption, iaID, clientDUID, serverDUID []byte, baseIP *
 	copy(iaadrOption, iaID)
 	copy(iaadrOption[16:], selectIP(iaID, clientDUID, serverDUID, baseIP))
 	return iaadrOption
-}
-
-func receiveMessage(conn *net.UDPConn, buf []byte) (message, *net.UDPAddr, error) {
-	n, addr, err := conn.ReadFrom(buf)
-	if err != nil {
-		return message{}, nil, errors.WithStack(err)
-	}
-
-	return parseMessage(buf[:n]), addr.(*net.UDPAddr), nil
 }
 
 func selectIP(iaID, clientDUID, serverDUID []byte, baseIP *net.IPNet) net.IP {
