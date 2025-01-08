@@ -11,7 +11,7 @@ func AllowICMPv4() RuleSource {
 	return func(chains Chains) []*nftables.Rule {
 		return []*nftables.Rule{
 			{
-				Chain: chains.FilterInput,
+				Chain: chains.V4FilterInput,
 				Exprs: []expr.Any{
 					&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 					&expr.Cmp{
@@ -33,7 +33,7 @@ func AllowICMPv6() RuleSource {
 	return func(chains Chains) []*nftables.Rule {
 		return []*nftables.Rule{
 			{
-				Chain: chains.FilterInput,
+				Chain: chains.V6FilterInput,
 				Exprs: []expr.Any{
 					&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 					&expr.Cmp{
