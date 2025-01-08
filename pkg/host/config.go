@@ -262,12 +262,14 @@ func runServices(ctx context.Context, services []Service) error {
 	case 0:
 		return errors.New("no services defined")
 	case 1:
-		return services[0].TaskFn(ctx)
+		s := services[0]
+		return s.TaskFn(logger.With(ctx, zap.String("service", s.Name)))
 	default:
 		return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 			for _, s := range services {
 				spawn("service:"+s.Name, s.OnExit, func(ctx context.Context) error {
-					log := logger.Get(ctx).With(zap.String("service", s.Name))
+					ctx = logger.With(ctx, zap.String("service", s.Name))
+					log := logger.Get(ctx)
 
 					log.Info("Starting service")
 					defer log.Info("Service stopped")
