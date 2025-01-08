@@ -17,7 +17,6 @@ import (
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/mount"
-	"github.com/outofforest/cloudless/pkg/systemd"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/parallel"
 )
@@ -261,12 +260,11 @@ func setSysctl(path string, value string) error {
 func runServices(ctx context.Context, services []Service) error {
 	switch len(services) {
 	case 0:
+		return errors.New("no services defined")
 	case 1:
-		if err := services[0].TaskFn(ctx); err != nil {
-			return err
-		}
+		return services[0].TaskFn(ctx)
 	default:
-		if err := parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+		return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 			for _, s := range services {
 				spawn("service:"+s.Name, s.OnExit, func(ctx context.Context) error {
 					log := logger.Get(ctx).With(zap.String("service", s.Name))
@@ -278,12 +276,8 @@ func runServices(ctx context.Context, services []Service) error {
 				})
 			}
 			return nil
-		}); err != nil {
-			return err
-		}
+		})
 	}
-
-	return systemd.Start()
 }
 
 func configureEnv(hostname string) error {
