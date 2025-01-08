@@ -35,19 +35,20 @@ var (
 
 // Config contains configuration.
 type Config struct {
-	KernelModules []string
+	KernelModules []kernel.Module
 	Hosts         []Host
 }
 
 // Host contains host configuration.
 type Host struct {
-	Hostname      string
-	KernelModules []string
-	Networks      []Network
-	DNS           []net.IP
-	Packages      []string
-	Firewall      []firewall.RuleSource
-	Services      []Service
+	Hostname             string
+	KernelModules        []kernel.Module
+	EnableIPV4Forwarding bool
+	Networks             []Network
+	DNS                  []net.IP
+	Packages             []string
+	Firewall             []firewall.RuleSource
+	Services             []Service
 }
 
 // Network contains network configuration.
@@ -122,6 +123,11 @@ func runHost(ctx context.Context, h Host) error {
 	if err := installPackages(ctx, h.Packages); err != nil {
 		return err
 	}
+	if h.EnableIPV4Forwarding {
+		if err := kernel.SetSysctl("net/ipv4/ip_forward", "1"); err != nil {
+			return err
+		}
+	}
 
 	err := runServices(ctx, h.Services)
 	switch {
@@ -134,7 +140,7 @@ func runHost(ctx context.Context, h Host) error {
 	}
 }
 
-func configureKernelModules(modules []string) error {
+func configureKernelModules(modules []kernel.Module) error {
 	for _, m := range modules {
 		if err := kernel.LoadModule(m); err != nil {
 			return err
@@ -197,7 +203,7 @@ func configureLoopback() error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	if err := setSysctl("net/ipv6/conf/lo/disable_ipv6", "1"); err != nil {
+	if err := kernel.SetSysctl("net/ipv6/conf/lo/disable_ipv6", "1"); err != nil {
 		return err
 	}
 	return errors.WithStack(netlink.LinkSetUp(lo))
@@ -236,7 +242,7 @@ func configureNetwork(n Network, l netlink.Link) error {
 	}
 
 	if !ip6Found {
-		if err := setSysctl(filepath.Join("net/ipv6/conf", lName, "disable_ipv6"), "1"); err != nil {
+		if err := kernel.SetSysctl(filepath.Join("net/ipv6/conf", lName, "disable_ipv6"), "1"); err != nil {
 			return err
 		}
 	}
@@ -245,36 +251,32 @@ func configureNetwork(n Network, l netlink.Link) error {
 }
 
 func configureIPv6OnInterface(lName string) error {
-	if err := setSysctl(filepath.Join("net/ipv6/conf", lName, "autoconf"), "0"); err != nil {
+	if err := kernel.SetSysctl(filepath.Join("net/ipv6/conf", lName, "autoconf"), "0"); err != nil {
 		return err
 	}
-	if err := setSysctl(filepath.Join("net/ipv6/conf", lName, "accept_ra"), "0"); err != nil {
+	if err := kernel.SetSysctl(filepath.Join("net/ipv6/conf", lName, "accept_ra"), "0"); err != nil {
 		return err
 	}
-	return setSysctl(filepath.Join("net/ipv6/conf", lName, "addr_gen_mode"), "1")
+	return kernel.SetSysctl(filepath.Join("net/ipv6/conf", lName, "addr_gen_mode"), "1")
 }
 
 func configureIPv6() error {
-	if err := setSysctl("net/ipv6/conf/default/addr_gen_mode", "1"); err != nil {
+	if err := kernel.SetSysctl("net/ipv6/conf/default/addr_gen_mode", "1"); err != nil {
 		return err
 	}
-	if err := setSysctl("net/ipv6/conf/default/autoconf", "0"); err != nil {
+	if err := kernel.SetSysctl("net/ipv6/conf/default/autoconf", "0"); err != nil {
 		return err
 	}
-	if err := setSysctl("net/ipv6/conf/default/accept_ra", "0"); err != nil {
+	if err := kernel.SetSysctl("net/ipv6/conf/default/accept_ra", "0"); err != nil {
 		return err
 	}
-	if err := setSysctl("net/ipv6/conf/all/addr_gen_mode", "1"); err != nil {
+	if err := kernel.SetSysctl("net/ipv6/conf/all/addr_gen_mode", "1"); err != nil {
 		return err
 	}
-	if err := setSysctl("net/ipv6/conf/all/autoconf", "0"); err != nil {
+	if err := kernel.SetSysctl("net/ipv6/conf/all/autoconf", "0"); err != nil {
 		return err
 	}
-	return setSysctl("net/ipv6/conf/all/accept_ra", "0")
-}
-
-func setSysctl(path string, value string) error {
-	return errors.WithStack(os.WriteFile(filepath.Join("/proc/sys", path), []byte(value), 0o644))
+	return kernel.SetSysctl("net/ipv6/conf/all/accept_ra", "0")
 }
 
 func runServices(ctx context.Context, services []Service) error {

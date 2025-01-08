@@ -21,8 +21,14 @@ const (
 	fileLoaded     = "/proc/modules"
 )
 
+// Module describes module to load.
+type Module struct {
+	Name   string
+	Params string
+}
+
 // LoadModule loads kernel module.
-func LoadModule(module string) (retErr error) {
+func LoadModule(module Module) (retErr error) {
 	defer func() {
 		if retErr != nil {
 			retErr = errors.Wrapf(retErr, "loading module %q failed", module)
@@ -35,20 +41,21 @@ func LoadModule(module string) (retErr error) {
 	}
 
 	releaseBase := filepath.Join(basePath, release)
-	module, err = resolveModuleAlias(module, filepath.Join(releaseBase, fileAliases))
+	module.Name, err = resolveModuleAlias(module.Name, filepath.Join(releaseBase, fileAliases))
 	if err != nil {
 		return err
 	}
 
-	if isBuiltIn, err := isBuiltInModule(module, filepath.Join(releaseBase, fileBuiltIn)); err != nil || isBuiltIn {
+	if isBuiltIn, err := isBuiltInModule(module.Name, filepath.Join(releaseBase, fileBuiltIn)); err != nil || isBuiltIn {
 		return err
 	}
 
-	modulesToLoad, err := findModulesToLoad(module, filepath.Join(releaseBase, fileDeps))
+	modulesToLoad, err := findModulesToLoad(module.Name, filepath.Join(releaseBase, fileDeps))
 	if err != nil {
 		return err
 	}
 
+	var params string
 	for i := len(modulesToLoad) - 1; i >= 0; i-- {
 		m := modulesToLoad[i]
 		loaded, err := isLoaded(m, fileLoaded)
@@ -59,7 +66,10 @@ func LoadModule(module string) (retErr error) {
 			continue
 		}
 
-		if err := loadModule(releaseBase, m); err != nil {
+		if i == 0 {
+			params = module.Params
+		}
+		if err := loadModule(releaseBase, m, params); err != nil {
 			return err
 		}
 	}
@@ -216,7 +226,7 @@ func isLoaded(modulePath string, fileLoaded string) (bool, error) {
 	}
 }
 
-func loadModule(releaseBase, modulePath string) error {
+func loadModule(releaseBase, modulePath, params string) error {
 	f, err := os.Open(filepath.Join(releaseBase, modulePath))
 	if err != nil {
 		return errors.WithStack(err)
@@ -233,5 +243,5 @@ func loadModule(releaseBase, modulePath string) error {
 		return errors.WithStack(err)
 	}
 
-	return errors.WithStack(unix.InitModule(mod, ""))
+	return errors.WithStack(unix.InitModule(mod, params))
 }
