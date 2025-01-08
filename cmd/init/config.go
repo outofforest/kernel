@@ -34,6 +34,8 @@ var config = host.Config{
 				net.IPv4(1, 1, 1, 1),
 				net.IPv4(8, 8, 8, 8),
 			},
+			Packages: []string{"libvirt-daemon-config-network", "libvirt-daemon-kvm", "qemu-kvm", "qemu-virtiofsd",
+				"libvirt-nss"},
 			Firewall: []firewall.RuleSource{
 				firewall.AllowICMPv4(),
 			},
