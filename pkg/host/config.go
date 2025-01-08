@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/mount"
+	"github.com/outofforest/libexec"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/parallel"
 )
@@ -41,6 +43,7 @@ type Host struct {
 	KernelModules []string
 	Networks      []Network
 	DNS           []net.IP
+	Packages      []string
 	Firewall      []firewall.RuleSource
 	Services      []Service
 }
@@ -105,13 +108,16 @@ func runHost(ctx context.Context, h Host) error {
 	if err := configureKernelModules(h.KernelModules); err != nil {
 		return err
 	}
-	if err := configureDNS(h.DNS); err != nil {
-		return err
-	}
 	if err := configureFirewall(h.Firewall); err != nil {
 		return err
 	}
+	if err := configureDNS(h.DNS); err != nil {
+		return err
+	}
 	if err := configureNetworks(h.Networks); err != nil {
+		return err
+	}
+	if err := installPackages(ctx, h.Packages); err != nil {
 		return err
 	}
 
@@ -313,4 +319,16 @@ func configureFirewall(sources []firewall.RuleSource) error {
 	}
 
 	return errors.WithStack(c.Flush())
+}
+
+func installPackages(ctx context.Context, packages []string) error {
+	if len(packages) == 0 {
+		return nil
+	}
+
+	// TODO (wojciech): One day I will write an rpm package manager in go.
+	return libexec.Exec(ctx, exec.Command("dnf", append(
+		[]string{"install", "--refresh", "-y", "--setopt=keepcache=False"},
+		packages...,
+	)...))
 }
