@@ -8,31 +8,20 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/outofforest/cloudless/pkg/host"
-	"github.com/outofforest/cloudless/pkg/kernel"
-	"github.com/outofforest/cloudless/pkg/mount"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/run"
 )
 
 func main() {
-	run.New().Run(context.Background(), "cloudless", func(ctx context.Context) (retErr error) {
-		defer func() {
-			if retErr != nil {
-				logger.Get(ctx).Error("Error", zap.Error(retErr))
-				time.Sleep(120 * time.Second)
-			}
-		}()
-
+	run.New().Run(context.Background(), "cloudless", func(ctx context.Context) error {
 		fmt.Println("I am cloudless init process.")
 
-		if err := mount.Root(); err != nil {
-			return err
+		err := host.Run(ctx, config)
+		if err != nil {
+			logger.Get(ctx).Error("Error", zap.Error(err))
+			time.Sleep(120 * time.Second)
 		}
 
-		if err := kernel.LoadModule("virtio_net"); err != nil {
-			return err
-		}
-
-		return host.Run(ctx, config)
+		return err
 	})
 }

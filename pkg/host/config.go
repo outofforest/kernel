@@ -16,6 +16,7 @@ import (
 
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/kernel"
+	"github.com/outofforest/cloudless/pkg/mount"
 	"github.com/outofforest/cloudless/pkg/systemd"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/parallel"
@@ -29,8 +30,14 @@ var (
 	ErrReboot = errors.New("reboot requested")
 )
 
-// Config contains host configuration.
+// Config contains configuration.
 type Config struct {
+	KernelModules []string
+	Hosts         []Host
+}
+
+// Host contains host configuration.
+type Host struct {
 	Hostname      string
 	KernelModules []string
 	Networks      []Network
@@ -54,7 +61,16 @@ type Service struct {
 }
 
 // Run runs host system.
-func Run(ctx context.Context, config []Config) error {
+func Run(ctx context.Context, config Config) error {
+	if err := mount.Root(); err != nil {
+		return err
+	}
+	for _, m := range config.KernelModules {
+		if err := kernel.LoadModule(m); err != nil {
+			return err
+		}
+	}
+
 	if err := configureIPv6(); err != nil {
 		return err
 	}
@@ -66,7 +82,7 @@ func Run(ctx context.Context, config []Config) error {
 
 	for _, l := range links {
 		hwAddr := l.Attrs().HardwareAddr
-		for _, hc := range config {
+		for _, hc := range config.Hosts {
 			for _, n := range hc.Networks {
 				if bytes.Equal(n.MAC, hwAddr) {
 					return runHost(ctx, hc)
@@ -78,29 +94,29 @@ func Run(ctx context.Context, config []Config) error {
 	return errors.Errorf("no matching link found")
 }
 
-func runHost(ctx context.Context, hc Config) error {
-	ctx = logger.With(ctx, zap.String("host", hc.Hostname))
+func runHost(ctx context.Context, h Host) error {
+	ctx = logger.With(ctx, zap.String("host", h.Hostname))
 
-	if err := configureEnv(hc.Hostname); err != nil {
+	if err := configureEnv(h.Hostname); err != nil {
 		return err
 	}
-	if err := configureHostname(hc.Hostname); err != nil {
+	if err := configureHostname(h.Hostname); err != nil {
 		return err
 	}
-	if err := configureKernelModules(hc.KernelModules); err != nil {
+	if err := configureKernelModules(h.KernelModules); err != nil {
 		return err
 	}
-	if err := configureDNS(hc.DNS); err != nil {
+	if err := configureDNS(h.DNS); err != nil {
 		return err
 	}
-	if err := configureFirewall(hc.Firewall); err != nil {
+	if err := configureFirewall(h.Firewall); err != nil {
 		return err
 	}
-	if err := configureNetworks(hc.Networks); err != nil {
+	if err := configureNetworks(h.Networks); err != nil {
 		return err
 	}
 
-	err := runServices(ctx, hc.Services)
+	err := runServices(ctx, h.Services)
 	switch {
 	case errors.Is(err, ErrPowerOff):
 		return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF))
@@ -146,11 +162,11 @@ func configureNetworks(networks []Network) error {
 		return errors.WithStack(err)
 	}
 
-	for _, nc := range networks {
+	for _, n := range networks {
 		var found bool
 		for _, l := range links {
-			if bytes.Equal(nc.MAC, l.Attrs().HardwareAddr) {
-				if err := configureNetwork(nc, l); err != nil {
+			if bytes.Equal(n.MAC, l.Attrs().HardwareAddr) {
+				if err := configureNetwork(n, l); err != nil {
 					return err
 				}
 				found = true
@@ -158,21 +174,21 @@ func configureNetworks(networks []Network) error {
 			}
 		}
 		if !found {
-			return errors.Errorf("link %s not found", nc.MAC)
+			return errors.Errorf("link %s not found", n.MAC)
 		}
 	}
 
 	return nil
 }
 
-func configureNetwork(nc Network, l netlink.Link) error {
+func configureNetwork(n Network, l netlink.Link) error {
 	lName := l.Attrs().Name
 	if err := configureIPv6OnInterface(lName); err != nil {
 		return err
 	}
 
 	var ip6Found bool
-	for _, ip := range nc.IPs {
+	for _, ip := range n.IPs {
 		if ip.IP.To4() == nil {
 			ip6Found = true
 		}
@@ -187,11 +203,11 @@ func configureNetwork(nc Network, l netlink.Link) error {
 		}
 	}
 
-	if nc.Gateway != nil {
+	if n.Gateway != nil {
 		if err := netlink.RouteAdd(&netlink.Route{
 			Scope:     netlink.SCOPE_UNIVERSE,
 			LinkIndex: l.Attrs().Index,
-			Gw:        nc.Gateway,
+			Gw:        n.Gateway,
 		}); err != nil {
 			return errors.WithStack(err)
 		}

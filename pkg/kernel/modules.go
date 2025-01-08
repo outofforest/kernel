@@ -13,15 +13,22 @@ import (
 )
 
 const (
-	basePath    = "/usr/lib/modules"
-	fileBuiltIn = "modules.builtin"
-	fileDeps    = "modules.dep"
-	fileAliases = "modules.alias"
-	fileLoaded  = "/proc/modules"
+	basePath       = "/usr/lib/modules"
+	fileBuiltIn    = "modules.builtin"
+	fileDeps       = "modules.dep"
+	fileAliases    = "modules.alias"
+	fileNetworking = "modules.networking"
+	fileLoaded     = "/proc/modules"
 )
 
 // LoadModule loads kernel module.
-func LoadModule(module string) error {
+func LoadModule(module string) (retErr error) {
+	defer func() {
+		if retErr != nil {
+			retErr = errors.Wrapf(retErr, "loading module %q failed", module)
+		}
+	}()
+
 	release, err := Release()
 	if err != nil {
 		return err
@@ -52,7 +59,7 @@ func LoadModule(module string) error {
 			continue
 		}
 
-		if err := loadModule(m); err != nil {
+		if err := loadModule(releaseBase, m); err != nil {
 			return err
 		}
 	}
@@ -209,13 +216,8 @@ func isLoaded(modulePath string, fileLoaded string) (bool, error) {
 	}
 }
 
-func loadModule(modulePath string) error {
-	release, err := Release()
-	if err != nil {
-		return err
-	}
-
-	f, err := os.Open(filepath.Join(basePath, release, modulePath))
+func loadModule(releaseBase, modulePath string) error {
+	f, err := os.Open(filepath.Join(releaseBase, modulePath))
 	if err != nil {
 		return errors.WithStack(err)
 	}
