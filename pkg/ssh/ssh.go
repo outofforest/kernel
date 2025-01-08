@@ -117,7 +117,7 @@ func runServer(ctx context.Context, signer ssh.Signer, authKeys [][]byte) error 
 
 				spawn(fmt.Sprintf("client-%s", conn.RemoteAddr()), parallel.Continue, func(ctx context.Context) error {
 					if err := client(ctx, conn, config); err != nil {
-						logger.Get(ctx).Error("SSH session failed.", zap.Error(err))
+						logger.Get(ctx).Error("SSH connection failed.", zap.Error(err))
 					}
 
 					return nil
@@ -169,7 +169,11 @@ func client(ctx context.Context, conn net.Conn, config *ssh.ServerConfig) error 
 						return errors.WithStack(err)
 					}
 
-					return handler(ctx, ch, reqCh)
+					if err := handler(ctx, ch, reqCh); err != nil {
+						logger.Get(ctx).Error("SSH session failed.", zap.Error(err))
+					}
+
+					return nil
 				})
 			}
 
@@ -181,95 +185,146 @@ func client(ctx context.Context, conn net.Conn, config *ssh.ServerConfig) error 
 }
 
 func handler(ctx context.Context, ch ssh.Channel, reqCh <-chan *ssh.Request) error {
-	ptm, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer ptm.Close()
-
-	ptsName, err := name(ptm)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	if err := unlock(ptm); err != nil {
-		return errors.WithStack(err)
-	}
-
-	pts, err := os.OpenFile(ptsName, os.O_RDWR|syscall.O_NOCTTY, 0)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer pts.Close()
+	defer ch.Close()
 
 	return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
-		spawn("watchdog", parallel.Fail, func(ctx context.Context) error {
-			defer ch.Close()
-			defer ptm.Close()
-			defer pts.Close()
+		var ptm, pts *os.File
+		for req := range reqCh {
+			switch req.Type {
+			case "exec":
+				if len(req.Payload) < 4 {
+					return errors.New("invalid payload")
+				}
+				cmdLen := binary.BigEndian.Uint32(req.Payload[:4])
+				if uint32(len(req.Payload)) < 4+cmdLen {
+					return errors.New("invalid payload")
+				}
 
-			<-ctx.Done()
-			return errors.WithStack(ctx.Err())
-		})
-		spawn("bash", parallel.Exit, func(ctx context.Context) error {
-			cmd := exec.Command(shellPath)
-			cmd.Dir = "/root"
-			cmd.SysProcAttr = &syscall.SysProcAttr{
-				Setctty: true,
-				Setsid:  true,
-			}
-			cmd.Stdin = pts
-			cmd.Stdout = pts
-			cmd.Stderr = pts
+				cmdStr := string(req.Payload[4 : 4+cmdLen])
 
-			return libexec.Exec(ctx, cmd)
-		})
-		spawn("copy1", parallel.Fail, func(ctx context.Context) error {
-			_, err := io.Copy(ptm, ch)
-			if ctx.Err() != nil {
-				return errors.WithStack(ctx.Err())
-			}
-			return errors.WithStack(err)
-		})
-		spawn("copy2", parallel.Fail, func(ctx context.Context) error {
-			_, err := io.Copy(ch, ptm)
-			if ctx.Err() != nil {
-				return errors.WithStack(ctx.Err())
-			}
-			return errors.WithStack(err)
-		})
-		spawn("req", parallel.Fail, func(ctx context.Context) error {
-			for req := range reqCh {
-				switch req.Type {
-				case "shell":
-					// We only accept the default shell
-					// (i.e. no command in the Payload)
-					if err := req.Reply(len(req.Payload) == 0, nil); err != nil {
+				r, w, err := os.Pipe()
+				if err != nil {
+					return errors.WithStack(err)
+				}
+
+				spawn("cmd", parallel.Exit, func(ctx context.Context) error {
+					defer ch.Close()
+
+					cmd := exec.Command("sh", "-c", cmdStr)
+					cmd.Stdin = r
+					cmd.Stdout = ch
+					cmd.Stderr = ch
+
+					return libexec.Exec(ctx, cmd)
+				})
+				spawn("copy", parallel.Fail, func(ctx context.Context) error {
+					_, err := io.Copy(w, ch)
+					if ctx.Err() != nil {
+						return errors.WithStack(ctx.Err())
+					}
+					return errors.WithStack(err)
+				})
+			case "shell":
+				// We only accept the default shell
+				// (i.e. no command in the Payload)
+				if err := req.Reply(len(req.Payload) == 0, nil); err != nil {
+					return errors.WithStack(err)
+				}
+			case "pty-req":
+				if ptm != nil {
+					if err := req.Reply(false, nil); err != nil {
 						return errors.WithStack(err)
-					}
-				case "pty-req":
-					termLen := req.Payload[3]
-					w, h := parseDims(req.Payload[termLen+4:])
-					if err := setWinsize(ptm.Fd(), w, h); err != nil {
-						return err
-					}
-					// Responding true (OK) here will let the client
-					// know we have a pty ready for input
-					if err := req.Reply(true, nil); err != nil {
-						return errors.WithStack(err)
-					}
-				case "window-change":
-					w, h := parseDims(req.Payload)
-					if err := setWinsize(ptm.Fd(), w, h); err != nil {
-						return err
 					}
 				}
+
+				if len(req.Payload) < 4 {
+					return errors.New("invalid payload")
+				}
+				termLen := int(req.Payload[3])
+
+				if len(req.Payload) < termLen+4 {
+					return errors.New("invalid payload")
+				}
+				w, h, err := parseDims(req.Payload[termLen+4:])
+				if err != nil {
+					return err
+				}
+
+				ptm, err = os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				defer ptm.Close()
+
+				if err := setWinsize(ptm.Fd(), w, h); err != nil {
+					return err
+				}
+
+				ptsName, err := name(ptm)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				if err := unlock(ptm); err != nil {
+					return errors.WithStack(err)
+				}
+
+				pts, err = os.OpenFile(ptsName, os.O_RDWR|syscall.O_NOCTTY, 0)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				defer pts.Close()
+
+				spawn("bash", parallel.Exit, func(ctx context.Context) error {
+					defer ch.Close()
+					defer ptm.Close()
+					defer pts.Close()
+
+					cmd := exec.Command(shellPath)
+					cmd.Dir = "/root"
+					cmd.SysProcAttr = &syscall.SysProcAttr{
+						Setctty: true,
+						Setsid:  true,
+					}
+					cmd.Stdin = pts
+					cmd.Stdout = pts
+					cmd.Stderr = pts
+
+					return libexec.Exec(ctx, cmd)
+				})
+				spawn("copy1", parallel.Fail, func(ctx context.Context) error {
+					_, err := io.Copy(ptm, ch)
+					if ctx.Err() != nil {
+						return errors.WithStack(ctx.Err())
+					}
+					return errors.WithStack(err)
+				})
+				spawn("copy2", parallel.Fail, func(ctx context.Context) error {
+					_, err := io.Copy(ch, ptm)
+					if ctx.Err() != nil {
+						return errors.WithStack(ctx.Err())
+					}
+					return errors.WithStack(err)
+				})
+
+				if err := req.Reply(true, nil); err != nil {
+					return errors.WithStack(err)
+				}
+			case "window-change":
+				if ptm == nil {
+					continue
+				}
+
+				w, h, err := parseDims(req.Payload)
+				if err != nil {
+					return err
+				}
+				if err := setWinsize(ptm.Fd(), w, h); err != nil {
+					return err
+				}
 			}
+		}
 
-			<-ctx.Done()
-
-			return errors.WithStack(ctx.Err())
-		})
-		return nil
+		return errors.WithStack(ctx.Err())
 	})
 }
 
@@ -293,8 +348,12 @@ func setWinsize(fd uintptr, w, h uint32) error {
 }
 
 // parseDims extracts terminal dimensions (width x height) from the provided buffer.
-func parseDims(b []byte) (uint32, uint32) {
-	return binary.BigEndian.Uint32(b), binary.BigEndian.Uint32(b[4:])
+func parseDims(b []byte) (uint32, uint32, error) {
+	if len(b) < 8 {
+		return 0, 0, errors.New("invalid payload")
+	}
+	w, h := binary.BigEndian.Uint32(b), binary.BigEndian.Uint32(b[4:])
+	return w, h, nil
 }
 
 func name(f *os.File) (string, error) {

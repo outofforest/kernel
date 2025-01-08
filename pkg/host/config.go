@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"syscall"
 
@@ -16,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/outofforest/cloudless/pkg/host/firewall"
+	"github.com/outofforest/cloudless/pkg/host/zombie"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/mount"
 	"github.com/outofforest/libexec"
@@ -162,6 +164,10 @@ func configureDNS(dns []net.IP) error {
 }
 
 func configureNetworks(networks []Network) error {
+	if err := configureLoopback(); err != nil {
+		return err
+	}
+
 	links, err := netlink.LinkList()
 	if err != nil {
 		return errors.WithStack(err)
@@ -184,6 +190,17 @@ func configureNetworks(networks []Network) error {
 	}
 
 	return nil
+}
+
+func configureLoopback() error {
+	lo, err := netlink.LinkByName("lo")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if err := setSysctl("net/ipv6/conf/lo/disable_ipv6", "1"); err != nil {
+		return err
+	}
+	return errors.WithStack(netlink.LinkSetUp(lo))
 }
 
 func configureNetwork(n Network, l netlink.Link) error {
@@ -238,9 +255,6 @@ func configureIPv6OnInterface(lName string) error {
 }
 
 func configureIPv6() error {
-	if err := setSysctl("net/ipv6/conf/lo/disable_ipv6", "1"); err != nil {
-		return err
-	}
 	if err := setSysctl("net/ipv6/conf/default/addr_gen_mode", "1"); err != nil {
 		return err
 	}
@@ -264,28 +278,39 @@ func setSysctl(path string, value string) error {
 }
 
 func runServices(ctx context.Context, services []Service) error {
-	switch len(services) {
-	case 0:
+	if len(services) == 0 {
 		return errors.New("no services defined")
-	case 1:
-		s := services[0]
-		return s.TaskFn(logger.With(ctx, zap.String("service", s.Name)))
-	default:
-		return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
-			for _, s := range services {
-				spawn("service:"+s.Name, s.OnExit, func(ctx context.Context) error {
-					ctx = logger.With(ctx, zap.String("service", s.Name))
-					log := logger.Get(ctx)
-
-					log.Info("Starting service")
-					defer log.Info("Service stopped")
-
-					return s.TaskFn(ctx)
-				})
-			}
-			return nil
-		})
 	}
+
+	return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+		appTerminatedCh := make(chan struct{})
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGCHLD)
+
+		spawn("zombie", parallel.Fail, func(ctx context.Context) error {
+			return zombie.Run(ctx, sigCh, appTerminatedCh)
+		})
+		spawn("services", parallel.Exit, func(ctx context.Context) error {
+			defer close(appTerminatedCh)
+
+			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+				for _, s := range services {
+					spawn(s.Name, s.OnExit, func(ctx context.Context) error {
+						ctx = logger.With(ctx, zap.String("service", s.Name))
+						log := logger.Get(ctx)
+
+						log.Info("Starting service")
+						defer log.Info("Service stopped")
+
+						return s.TaskFn(ctx)
+					})
+				}
+				return nil
+			})
+		})
+
+		return nil
+	})
 }
 
 func configureEnv(hostname string) error {
@@ -297,6 +322,7 @@ func configureEnv(hostname string) error {
 		"PATH":     "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin",
 		"HOME":     "/root",
 		"USER":     "root",
+		"TERM":     "xterm-256color",
 		"HOSTNAME": hostname,
 	} {
 		if err := os.Setenv(k, v); err != nil {

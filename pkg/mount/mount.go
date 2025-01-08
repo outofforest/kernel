@@ -22,7 +22,7 @@ func DevFS(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return errors.WithStack(err)
 	}
-	return errors.WithStack(syscall.Mount("none", dir, "devtmpfs", 0, ""))
+	return errors.WithStack(syscall.Mount("none", dir, "devtmpfs", 0, "size=4m"))
 }
 
 // DevPtsFS mounts devpts.

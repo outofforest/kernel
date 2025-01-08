@@ -11,13 +11,19 @@ import (
 	"github.com/outofforest/cloudless/pkg/pxe/dhcp6"
 	"github.com/outofforest/cloudless/pkg/pxe/tftp"
 	"github.com/outofforest/cloudless/pkg/ssh"
+	"github.com/outofforest/cloudless/pkg/virt"
 )
 
 var config = host.Config{
-	KernelModules: []string{"virtio_net"},
+	KernelModules: []string{
+		"virtio_net",
+	},
 	Hosts: []host.Host{
 		{
 			Hostname: "demo",
+			KernelModules: []string{
+				"tun",
+			},
 			Networks: []host.Network{
 				{
 					MAC: net.HardwareAddr{0x00, 0x01, 0x0a, 0x00, 0x00, 0x9b},
@@ -34,15 +40,29 @@ var config = host.Config{
 				net.IPv4(1, 1, 1, 1),
 				net.IPv4(8, 8, 8, 8),
 			},
-			Packages: []string{"libvirt-daemon-config-network", "libvirt-daemon-kvm", "qemu-kvm", "qemu-virtiofsd",
-				"libvirt-nss"},
+			Packages: []string{
+				"libvirt-daemon-config-network",
+				"libvirt-daemon-kvm",
+				"qemu-kvm",
+				"qemu-virtiofsd",
+				"libvirt-nss",
+			},
 			Firewall: []firewall.RuleSource{
+				firewall.OpenV4TCPPort(ssh.Port),
 				firewall.AllowICMPv4(),
+			},
+			Services: []host.Service{
+				acpi.NewPowerService(),
+				ntp.NewService(),
+				ssh.NewService("AAAAC3NzaC1lZDI1NTE5AAAAIEcJvvtOBgTsm3mq3Sg8cjn6Mz/vC9f3k6a89ZOjIyF6"),
+				virt.NewService(),
 			},
 		},
 		{
-			Hostname:      "pxe",
-			KernelModules: []string{"virtio_scsi"},
+			Hostname: "pxe",
+			KernelModules: []string{
+				"virtio_scsi",
+			},
 			Networks: []host.Network{
 				{
 					MAC: net.HardwareAddr{0x00, 0x01, 0x0a, 0x00, 0x00, 0x05},
@@ -68,12 +88,13 @@ var config = host.Config{
 				net.IPv4(8, 8, 8, 8),
 			},
 			Firewall: []firewall.RuleSource{
-				firewall.OpenTCPPort(ssh.Port),
-				firewall.OpenUDPPort(dhcp6.Port),
-				firewall.OpenUDPPort(tftp.Port),
+				firewall.OpenV4TCPPort(ssh.Port),
+				firewall.OpenV6UDPPort(dhcp6.Port),
+				firewall.OpenV6UDPPort(tftp.Port),
 				firewall.AllowICMPv4(),
 				firewall.AllowICMPv6(),
 			},
+			Packages: []string{"htop"},
 			Services: []host.Service{
 				acpi.NewPowerService(),
 				ntp.NewService(),
