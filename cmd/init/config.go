@@ -6,6 +6,7 @@ import (
 	"github.com/outofforest/cloudless/pkg/acpi"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
+	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/ntp"
 	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/cloudless/pkg/pxe/dhcp6"
@@ -15,15 +16,24 @@ import (
 )
 
 var config = host.Config{
-	KernelModules: []string{
-		"virtio_net",
+	KernelModules: []kernel.Module{
+		{
+			Name: "virtio_net",
+		},
 	},
 	Hosts: []host.Host{
 		{
 			Hostname: "demo",
-			KernelModules: []string{
-				"tun",
+			KernelModules: []kernel.Module{
+				{
+					Name: "tun",
+				},
+				{
+					Name:   "kvm-intel",
+					Params: "nested=Y",
+				},
 			},
+			EnableIPV4Forwarding: true,
 			Networks: []host.Network{
 				{
 					MAC: net.HardwareAddr{0x00, 0x01, 0x0a, 0x00, 0x00, 0x9b},
@@ -60,8 +70,10 @@ var config = host.Config{
 		},
 		{
 			Hostname: "pxe",
-			KernelModules: []string{
-				"virtio_scsi",
+			KernelModules: []kernel.Module{
+				{
+					Name: "virtio_scsi",
+				},
 			},
 			Networks: []host.Network{
 				{

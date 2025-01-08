@@ -54,7 +54,7 @@ func Root() error {
 	if err := ProcFS("/proc"); err != nil {
 		return err
 	}
-	if err := kernel.LoadModule("overlay"); err != nil {
+	if err := kernel.LoadModule(kernel.Module{Name: "overlay"}); err != nil {
 		return err
 	}
 	if err := syscall.Unmount("/proc", 0); err != nil {

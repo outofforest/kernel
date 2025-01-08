@@ -103,22 +103,6 @@ func EnsureChains(c *nftables.Conn) Chains {
 	})
 
 	c.AddRule(&nftables.Rule{
-		Table: nfTableV6,
-		Chain: filterInputChainV6,
-		Exprs: []expr.Any{
-			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
-			&expr.Cmp{
-				Op:       expr.CmpOpEq,
-				Register: 1,
-				Data:     []byte("lo\x00"),
-			},
-			&expr.Verdict{
-				Kind: expr.VerdictAccept,
-			},
-		},
-	})
-
-	c.AddRule(&nftables.Rule{
 		Table: nfTableV4,
 		Chain: filterInputChainV4,
 		Exprs: []expr.Any{
