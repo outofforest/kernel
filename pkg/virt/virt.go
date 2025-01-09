@@ -43,6 +43,14 @@ func setConfig() error {
 	}
 	defer configF.Close()
 
-	_, err = configF.WriteString("\nuser = \"root\"\ngroup = \"root\"\n")
-	return errors.WithStack(err)
+	if _, err := configF.WriteString("\nuser = \"root\"\ngroup = \"root\"\n"); err != nil {
+		return errors.WithStack(err)
+	}
+
+	return errors.WithStack(filepath.WalkDir("/etc/libvirt/qemu", func(path string, d os.DirEntry, err error) error {
+		if !d.IsDir() {
+			return os.Remove(path)
+		}
+		return nil
+	}))
 }
