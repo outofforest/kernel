@@ -1,10 +1,12 @@
 package build
 
 import (
+	"archive/tar"
 	"compress/gzip"
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/cavaliergopher/cpio"
@@ -21,9 +23,9 @@ import (
 const (
 	initBinPath       = "bin/init"
 	initramfsPath     = "bin/embed/initramfs"
-	initramfsBasePath = "bin/embed/initramfs.base"
+	initramfsBasePath = "bin/embed/initramfs.tar"
 	kernelPath        = "bin/embed/vmlinuz"
-	kernelFilePrefix  = "usr/lib/modules/"
+	kernelFilePrefix  = "./usr/lib/modules/"
 	kernelFileSuffix  = "/vmlinuz"
 )
 
@@ -82,80 +84,32 @@ func prepareEmbeds(ctx context.Context, deps types.DepsFunc) error {
 	}
 	defer initramfsF.Close()
 
+	cW := gzip.NewWriter(initramfsF)
+	defer cW.Close()
+
+	w := cpio.NewWriter(cW)
+	defer w.Close()
+
+	if err := addFile(w, 0o600, initramfsBasePath); err != nil {
+		return err
+	}
+	if err := addFile(w, 0o700, initBinPath); err != nil {
+		return err
+	}
+
 	initramfsBaseF, err := os.Open(initramfsBasePath)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	defer initramfsF.Close()
+	defer initramfsBaseF.Close()
 
-	tReader := io.TeeReader(initramfsBaseF, initramfsF)
-	cReader, err := gzip.NewReader(tReader)
+	vmLinuzF, err := os.OpenFile(kernelPath, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0o700)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	defer cReader.Close()
+	defer vmLinuzF.Close()
 
-	r := cpio.NewReader(cReader)
-	for {
-		fInfo, err := r.Next()
-		switch {
-		case err == nil:
-		case errors.Is(err, io.EOF):
-			return errors.New("kernel not found in rpm")
-		default:
-			return errors.WithStack(err)
-		}
-
-		if strings.HasPrefix(fInfo.Name, kernelFilePrefix) && strings.HasSuffix(fInfo.Name, kernelFileSuffix) &&
-			fInfo.Linkname == "" {
-			vmlinuzF, err := os.OpenFile(kernelPath, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0o700)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer vmlinuzF.Close()
-
-			if _, err := io.Copy(vmlinuzF, r); err != nil {
-				return errors.WithStack(err)
-			}
-
-			break
-		}
-	}
-
-	if _, err := io.ReadAll(tReader); err != nil {
-		return errors.WithStack(err)
-	}
-
-	cWriter := gzip.NewWriter(initramfsF)
-	defer cWriter.Close()
-
-	w := cpio.NewWriter(cWriter)
-	defer w.Close()
-
-	initF, err := os.Open(initBinPath)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer initF.Close()
-
-	initSize, err := initF.Seek(0, io.SeekEnd)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	_, err = initF.Seek(0, io.SeekStart)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-
-	if err := w.WriteHeader(&cpio.Header{
-		Name: "init",
-		Mode: 0o700,
-		Size: initSize,
-	}); err != nil {
-		return errors.WithStack(err)
-	}
-	_, err = io.Copy(w, initF)
-	return errors.WithStack(err)
+	return untarVMLinuz(initramfsBaseF, vmLinuzF)
 }
 
 func buildInit(ctx context.Context, deps types.DepsFunc) error {
@@ -166,4 +120,51 @@ func buildInit(ctx context.Context, deps types.DepsFunc) error {
 		PackagePath:   "cmd/init",
 		BinOutputPath: initBinPath,
 	})
+}
+
+func addFile(w *cpio.Writer, mode cpio.FileMode, file string) error {
+	f, err := os.Open(file)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer f.Close()
+
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := w.WriteHeader(&cpio.Header{
+		Name: filepath.Base(file),
+		Size: size,
+		Mode: mode,
+	}); err != nil {
+		return errors.WithStack(err)
+	}
+
+	_, err = io.Copy(w, f)
+	return errors.WithStack(err)
+}
+
+func untarVMLinuz(reader io.Reader, writer io.Writer) error {
+	tr := tar.NewReader(reader)
+	for {
+		header, err := tr.Next()
+		switch {
+		case errors.Is(err, io.EOF):
+			return errors.New("kernel not found")
+		case err != nil:
+			return errors.WithStack(err)
+		case header == nil:
+			continue
+		case header.Typeflag == tar.TypeReg:
+			if strings.HasPrefix(header.Name, kernelFilePrefix) && strings.HasSuffix(header.Name, kernelFileSuffix) {
+				_, err := io.Copy(writer, tr)
+				return errors.WithStack(err)
+			}
+		}
+	}
 }

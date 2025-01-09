@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"github.com/google/nftables"
@@ -33,6 +34,28 @@ var (
 	ErrReboot = errors.New("reboot requested")
 )
 
+// Configurator allows service to configure the required host settings.
+type Configurator struct {
+	mu     sync.Mutex
+	chains firewall.Chains
+}
+
+// AddFirewallRules add firewall rules.
+func (c *Configurator) AddFirewallRules(sources ...firewall.RuleSource) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	conn := &nftables.Conn{}
+
+	for _, s := range sources {
+		for _, r := range s(c.chains) {
+			r.Table = r.Chain.Table
+			conn.AddRule(r)
+		}
+	}
+	return errors.WithStack(conn.Flush())
+}
+
 // Config contains configuration.
 type Config struct {
 	KernelModules []kernel.Module
@@ -44,6 +67,7 @@ type Host struct {
 	Hostname             string
 	KernelModules        []kernel.Module
 	EnableIPV4Forwarding bool
+	EnableIPV6Forwarding bool
 	Networks             []Network
 	DNS                  []net.IP
 	Packages             []string
@@ -60,9 +84,9 @@ type Network struct {
 
 // Service contains service configuration.
 type Service struct {
-	Name   string
-	OnExit parallel.OnExit
-	TaskFn parallel.Task
+	Name      string
+	OnExit    parallel.OnExit
+	ServiceFn func(ctx context.Context, configurator *Configurator) error
 }
 
 // Run runs host system.
@@ -111,9 +135,18 @@ func runHost(ctx context.Context, h Host) error {
 	if err := configureKernelModules(h.KernelModules); err != nil {
 		return err
 	}
-	if err := configureFirewall(h.Firewall); err != nil {
+
+	chains, err := firewall.EnsureChains()
+	if err != nil {
 		return err
 	}
+	configurator := &Configurator{
+		chains: chains,
+	}
+	if err := configurator.AddFirewallRules(h.Firewall...); err != nil {
+		return err
+	}
+
 	if err := configureDNS(h.DNS); err != nil {
 		return err
 	}
@@ -123,13 +156,22 @@ func runHost(ctx context.Context, h Host) error {
 	if err := installPackages(ctx, h.Packages); err != nil {
 		return err
 	}
+
+	// FIXME (wojciech): Do it only for specific interface.
 	if h.EnableIPV4Forwarding {
-		if err := kernel.SetSysctl("net/ipv4/ip_forward", "1"); err != nil {
+		if err := kernel.SetSysctl("net/ipv4/conf/all/forwarding", "1"); err != nil {
 			return err
 		}
 	}
 
-	err := runServices(ctx, h.Services)
+	// FIXME (wojciech): Do it only for specific interface.
+	if h.EnableIPV6Forwarding {
+		if err := kernel.SetSysctl("net/ipv6/conf/all/forwarding", "1"); err != nil {
+			return err
+		}
+	}
+
+	err = runServices(ctx, configurator, h.Services)
 	switch {
 	case errors.Is(err, ErrPowerOff):
 		return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF))
@@ -279,7 +321,7 @@ func configureIPv6() error {
 	return kernel.SetSysctl("net/ipv6/conf/all/accept_ra", "0")
 }
 
-func runServices(ctx context.Context, services []Service) error {
+func runServices(ctx context.Context, configurator *Configurator, services []Service) error {
 	if len(services) == 0 {
 		return errors.New("no services defined")
 	}
@@ -304,7 +346,7 @@ func runServices(ctx context.Context, services []Service) error {
 						log.Info("Starting service")
 						defer log.Info("Service stopped")
 
-						return s.TaskFn(ctx)
+						return s.ServiceFn(ctx, configurator)
 					})
 				}
 				return nil
@@ -333,20 +375,6 @@ func configureEnv(hostname string) error {
 	}
 
 	return nil
-}
-
-func configureFirewall(sources []firewall.RuleSource) error {
-	c := &nftables.Conn{}
-	chains := firewall.EnsureChains(c)
-
-	for _, s := range sources {
-		for _, r := range s(chains) {
-			r.Table = r.Chain.Table
-			c.AddRule(r)
-		}
-	}
-
-	return errors.WithStack(c.Flush())
 }
 
 func installPackages(ctx context.Context, packages []string) error {

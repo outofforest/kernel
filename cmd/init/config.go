@@ -34,6 +34,7 @@ var config = host.Config{
 				},
 			},
 			EnableIPV4Forwarding: true,
+			EnableIPV6Forwarding: true,
 			Networks: []host.Network{
 				{
 					MAC: net.HardwareAddr{0x00, 0x01, 0x0a, 0x00, 0x00, 0x9b},
@@ -65,7 +66,38 @@ var config = host.Config{
 				acpi.NewPowerService(),
 				ntp.NewService(),
 				ssh.NewService("AAAAC3NzaC1lZDI1NTE5AAAAIEcJvvtOBgTsm3mq3Sg8cjn6Mz/vC9f3k6a89ZOjIyF6"),
-				virt.NewService(),
+				virt.NewService(
+					virt.CreateNATedNetwork(),
+					virt.CreateVM(),
+				),
+			},
+		},
+		{
+			Hostname: "vm",
+			Networks: []host.Network{
+				{
+					MAC: net.HardwareAddr{0x00, 0x01, 0x0a, 0x00, 0x02, 0x05},
+					IPs: []net.IPNet{
+						{
+							IP:   net.IPv4(10, 0, 1, 2),
+							Mask: net.IPv4Mask(255, 255, 255, 0),
+						},
+					},
+					Gateway: net.IPv4(10, 0, 1, 1),
+				},
+			},
+			DNS: []net.IP{
+				net.IPv4(1, 1, 1, 1),
+				net.IPv4(8, 8, 8, 8),
+			},
+			Firewall: []firewall.RuleSource{
+				firewall.OpenV4TCPPort(ssh.Port),
+				firewall.AllowICMPv4(),
+			},
+			Services: []host.Service{
+				acpi.NewPowerService(),
+				ntp.NewService(),
+				ssh.NewService("AAAAC3NzaC1lZDI1NTE5AAAAIEcJvvtOBgTsm3mq3Sg8cjn6Mz/vC9f3k6a89ZOjIyF6"),
 			},
 		},
 		{
@@ -106,7 +138,6 @@ var config = host.Config{
 				firewall.AllowICMPv4(),
 				firewall.AllowICMPv6(),
 			},
-			Packages: []string{"htop"},
 			Services: []host.Service{
 				acpi.NewPowerService(),
 				ntp.NewService(),

@@ -6,14 +6,14 @@ import (
 	"github.com/outofforest/cloudless/pkg/host/firewall/rules"
 )
 
-// AllowICMPv4 allows for ICMPv4 traffic.
-func AllowICMPv4() RuleSource {
+// ForwardTo accepts traffic forwarded to the interface.
+func ForwardTo(iface string) RuleSource {
 	return func(chains Chains) []*nftables.Rule {
 		return []*nftables.Rule{
 			{
-				Chain: chains.V4FilterInput,
+				Chain: chains.V4FilterForward,
 				Exprs: rules.Expressions(
-					rules.Protocol("icmpv4"),
+					rules.IncomingInterface(iface),
 					rules.Accept(),
 				),
 			},
@@ -21,14 +21,14 @@ func AllowICMPv4() RuleSource {
 	}
 }
 
-// AllowICMPv6 allows for ICMPv6 traffic.
-func AllowICMPv6() RuleSource {
+// ForwardFrom accepts traffic forwarded from the interface.
+func ForwardFrom(iface string) RuleSource {
 	return func(chains Chains) []*nftables.Rule {
 		return []*nftables.Rule{
 			{
-				Chain: chains.V6FilterInput,
+				Chain: chains.V4FilterForward,
 				Exprs: rules.Expressions(
-					rules.Protocol("icmpv6"),
+					rules.OutgoingInterface(iface),
 					rules.Accept(),
 				),
 			},

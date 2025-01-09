@@ -39,7 +39,7 @@ func NewService() host.Service {
 	return host.Service{
 		Name:   "ntp",
 		OnExit: parallel.Fail,
-		TaskFn: func(ctx context.Context) error {
+		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
 			log := logger.Get(ctx)
 			rnd := rand.New(rand.NewSource(time.Now().Unix()))
 			for {

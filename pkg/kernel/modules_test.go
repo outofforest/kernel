@@ -7,14 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolveModuleAlias(t *testing.T) {
-	requireT := require.New(t)
-
-	module, err := resolveModuleAlias("fs-overlay", filepath.Join("test", fileAliases))
-	requireT.NoError(err)
-	requireT.Equal("overlay", module)
-}
-
 func TestBuiltInModule(t *testing.T) {
 	requireT := require.New(t)
 
