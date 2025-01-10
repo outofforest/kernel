@@ -10,13 +10,13 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/outofforest/cloudless/pkg/host"
+	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/thttp"
 	"github.com/outofforest/libexec"
 	"github.com/outofforest/parallel"
 )
 
-// Port is the port where repository is served.
-const Port = 80
+const port = 80
 
 // PackageProvider provides the list of packages to download.
 type PackageProvider func() []string
@@ -26,6 +26,9 @@ func NewService(repoRoot string, pkgProvider PackageProvider) host.Service {
 	return host.Service{
 		Name:   "yum",
 		OnExit: parallel.Fail,
+		Firewall: []firewall.RuleSource{
+			firewall.OpenV4TCPPort(port),
+		},
 		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
 			packages := pkgProvider()
 			if len(packages) == 0 {
@@ -46,7 +49,7 @@ func NewService(repoRoot string, pkgProvider PackageProvider) host.Service {
 				return errors.WithStack(err)
 			}
 
-			l, err := net.ListenTCP("tcp", &net.TCPAddr{Port: Port})
+			l, err := net.ListenTCP("tcp", &net.TCPAddr{Port: port})
 			if err != nil {
 				return errors.WithStack(err)
 			}

@@ -20,15 +20,14 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/outofforest/cloudless/pkg/host"
+	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/libexec"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/parallel"
 )
 
 const (
-	// Port is the port ssh server listens on.
-	Port = 22
-
+	port      = 22
 	shellPath = "/usr/bin/bash"
 )
 
@@ -37,6 +36,9 @@ func NewService(authorizedKeys ...string) host.Service {
 	return host.Service{
 		Name:   "ssh",
 		OnExit: parallel.Fail,
+		Firewall: []firewall.RuleSource{
+			firewall.OpenV4TCPPort(port),
+		},
 		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
 			if len(authorizedKeys) == 0 {
 				return errors.New("no authorized keys specified")
@@ -74,7 +76,7 @@ func NewService(authorizedKeys ...string) host.Service {
 }
 
 func runServer(ctx context.Context, signer ssh.Signer, authKeys [][]byte) error {
-	l, err := net.Listen("tcp", ":"+strconv.Itoa(Port))
+	l, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
 		return errors.WithStack(err)
 	}

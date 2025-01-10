@@ -89,6 +89,24 @@ func EnsureChains() (Chains, error) {
 		Table: nfTableV6,
 		Chain: filterInputChainV6,
 		Exprs: rules.Expressions(
+			rules.Protocol("icmpv6"),
+			rules.Accept(),
+		),
+	})
+
+	c.AddRule(&nftables.Rule{
+		Table: nfTableV4,
+		Chain: filterInputChainV4,
+		Exprs: rules.Expressions(
+			rules.Protocol("icmpv4"),
+			rules.Accept(),
+		),
+	})
+
+	c.AddRule(&nftables.Rule{
+		Table: nfTableV6,
+		Chain: filterInputChainV6,
+		Exprs: rules.Expressions(
 			rules.ConnectionEstablished(),
 			rules.Accept(),
 		),

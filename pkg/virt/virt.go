@@ -9,15 +9,38 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/outofforest/cloudless/pkg/host"
+	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/libexec"
 	"github.com/outofforest/parallel"
 )
 
+var kernelModules = []kernel.Module{
+	{
+		Name: "tun",
+	},
+	{
+		Name:   "kvm-intel",
+		Params: "nested=Y",
+	},
+}
+
+var packages = []string{
+	"libvirt-daemon-config-network",
+	"libvirt-daemon-kvm",
+	"qemu-kvm",
+	"qemu-virtiofsd",
+	"libvirt-nss",
+}
+
 // NewService creates new virtualization service.
 func NewService(objects ...ObjectSource) host.Service {
 	return host.Service{
-		Name:   "virt",
-		OnExit: parallel.Fail,
+		Name:                 "virt",
+		OnExit:               parallel.Fail,
+		RequiresIPForwarding: true,
+		RequiresInitramfs:    true,
+		KernelModules:        kernelModules,
+		Packages:             packages,
 		ServiceFn: func(ctx context.Context, configurator *host.Configurator) error {
 			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 				if err := setConfig(); err != nil {
