@@ -2,8 +2,11 @@ package host
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
+	_ "embed"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -12,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/cavaliergopher/cpio"
 	"github.com/google/nftables"
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
@@ -25,6 +29,9 @@ import (
 	"github.com/outofforest/logger"
 	"github.com/outofforest/parallel"
 )
+
+//go:embed cloudless.repo
+var cloudlessRepo []byte
 
 var (
 	// ErrPowerOff means that host should be powered off.
@@ -68,6 +75,7 @@ type Host struct {
 	KernelModules        []kernel.Module
 	EnableIPV4Forwarding bool
 	EnableIPV6Forwarding bool
+	CreateInitramfs      bool
 	Networks             []Network
 	DNS                  []net.IP
 	Packages             []string
@@ -126,6 +134,14 @@ func Run(ctx context.Context, config Config) error {
 func runHost(ctx context.Context, h Host) error {
 	ctx = logger.With(ctx, zap.String("host", h.Hostname))
 
+	if h.CreateInitramfs {
+		if err := buildInitramfs(); err != nil {
+			return err
+		}
+	}
+	if err := removeOldRoot(); err != nil {
+		return err
+	}
 	if err := configureEnv(h.Hostname); err != nil {
 		return err
 	}
@@ -151,6 +167,9 @@ func runHost(ctx context.Context, h Host) error {
 		return err
 	}
 	if err := configureNetworks(h.Networks); err != nil {
+		return err
+	}
+	if err := configureCloudlessRepo(); err != nil {
 		return err
 	}
 	if err := installPackages(ctx, h.Packages); err != nil {
@@ -384,7 +403,76 @@ func installPackages(ctx context.Context, packages []string) error {
 
 	// TODO (wojciech): One day I will write an rpm package manager in go.
 	return libexec.Exec(ctx, exec.Command("dnf", append(
-		[]string{"install", "--refresh", "-y", "--setopt=keepcache=False"},
+		[]string{"install", "--refresh", "-y", "--setopt=keepcache=False", "--repo=cloudless"},
 		packages...,
 	)...))
+}
+
+func buildInitramfs() error {
+	if err := os.MkdirAll("/boot", 0o555); err != nil {
+		return errors.WithStack(err)
+	}
+	dF, err := os.OpenFile("/boot/initramfs", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer dF.Close()
+
+	cW := gzip.NewWriter(dF)
+	defer cW.Close()
+
+	w := cpio.NewWriter(cW)
+	defer w.Close()
+
+	if err := addFile(w, 0o600, "/oldroot/initramfs.tar"); err != nil {
+		return err
+	}
+	return addFile(w, 0o700, "/oldroot/init")
+}
+
+func addFile(w *cpio.Writer, mode cpio.FileMode, file string) error {
+	f, err := os.Open(file)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer f.Close()
+
+	size, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := w.WriteHeader(&cpio.Header{
+		Name: filepath.Base(file),
+		Size: size,
+		Mode: mode,
+	}); err != nil {
+		return errors.WithStack(err)
+	}
+
+	_, err = io.Copy(w, f)
+	return errors.WithStack(err)
+}
+
+func removeOldRoot() error {
+	items, err := os.ReadDir("/oldroot")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	for _, item := range items {
+		if err := os.RemoveAll(filepath.Join("/oldroot", item.Name())); err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	if err := syscall.Unmount("/oldroot", 0); err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(os.RemoveAll("/oldroot"))
+}
+
+func configureCloudlessRepo() error {
+	return errors.WithStack(os.WriteFile("/etc/yum.repos.d/cloudless.repo", cloudlessRepo, 0o600))
 }
