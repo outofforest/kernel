@@ -106,7 +106,7 @@ func Network(mac string, ips ...string) host.Network {
 	}
 
 	for _, ip := range ips {
-		if strings.Index(ip, ".") >= 0 {
+		if strings.Contains(ip, ".") {
 			n.IPs = append(n.IPs, IPNet4(ip))
 		} else {
 			n.IPs = append(n.IPs, IPNet6(ip))
