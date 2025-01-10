@@ -14,14 +14,20 @@ import (
 )
 
 // NewService creates new virtualization service.
-func NewService() host.Service {
+func NewService(objects ...ObjectSource) host.Service {
 	return host.Service{
 		Name:   "virt",
 		OnExit: parallel.Fail,
-		TaskFn: func(ctx context.Context) error {
+		ServiceFn: func(ctx context.Context, configurator *host.Configurator) error {
 			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 				if err := setConfig(); err != nil {
 					return err
+				}
+
+				for _, o := range objects {
+					if err := o(configurator); err != nil {
+						return err
+					}
 				}
 
 				for _, c := range []string{"virtqemud", "virtlogd", "virtstoraged", "virtnetworkd", "virtnodedevd"} {
@@ -35,6 +41,9 @@ func NewService() host.Service {
 		},
 	}
 }
+
+// ObjectSource creates virtualized objects.
+type ObjectSource func(configurator *host.Configurator) error
 
 func setConfig() error {
 	configF, err := os.OpenFile("/etc/libvirt/qemu.conf", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

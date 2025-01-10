@@ -37,7 +37,7 @@ func NewService(authorizedKeys ...string) host.Service {
 	return host.Service{
 		Name:   "ssh",
 		OnExit: parallel.Fail,
-		TaskFn: func(ctx context.Context) error {
+		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
 			if len(authorizedKeys) == 0 {
 				return errors.New("no authorized keys specified")
 			}
@@ -145,9 +145,14 @@ func client(ctx context.Context, conn net.Conn, config *ssh.ServerConfig) error 
 				select {
 				case <-ctx.Done():
 					return errors.WithStack(ctx.Err())
-				case _, ok := <-reqCh:
+				case req, ok := <-reqCh:
 					if !ok {
 						return errors.WithStack(ctx.Err())
+					}
+					if req.WantReply {
+						if err := req.Reply(false, nil); err != nil {
+							return errors.WithStack(err)
+						}
 					}
 				}
 			}
@@ -157,20 +162,20 @@ func client(ctx context.Context, conn net.Conn, config *ssh.ServerConfig) error 
 
 			for chReq := range newCh {
 				spawn(fmt.Sprintf("channel-%d", chID), parallel.Continue, func(ctx context.Context) error {
-					if chReq.ChannelType() != "session" {
+					switch chReq.ChannelType() {
+					case "session":
+						if err := sessionHandler(ctx, chReq, reqCh); err != nil {
+							logger.Get(ctx).Error("SSH session failed.", zap.Error(err))
+						}
+					case "direct-tcpip":
+						if err := forwardHandler(ctx, chReq, reqCh); err != nil {
+							logger.Get(ctx).Error("SSH forwarding failed.", zap.Error(err))
+						}
+					default:
 						if err := chReq.Reject(ssh.UnknownChannelType, "unknown channel type"); err != nil {
 							return errors.WithStack(err)
 						}
 						return nil
-					}
-
-					ch, reqCh, err := chReq.Accept()
-					if err != nil {
-						return errors.WithStack(err)
-					}
-
-					if err := handler(ctx, ch, reqCh); err != nil {
-						logger.Get(ctx).Error("SSH session failed.", zap.Error(err))
 					}
 
 					return nil
@@ -184,7 +189,11 @@ func client(ctx context.Context, conn net.Conn, config *ssh.ServerConfig) error 
 	})
 }
 
-func handler(ctx context.Context, ch ssh.Channel, reqCh <-chan *ssh.Request) error {
+func sessionHandler(ctx context.Context, chReq ssh.NewChannel, reqCh <-chan *ssh.Request) error {
+	ch, reqCh, err := chReq.Accept()
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	defer ch.Close()
 
 	return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
@@ -328,6 +337,60 @@ func handler(ctx context.Context, ch ssh.Channel, reqCh <-chan *ssh.Request) err
 	})
 }
 
+func forwardHandler(ctx context.Context, chReq ssh.NewChannel, reqCh <-chan *ssh.Request) error {
+	data := directTCPData{}
+	if err := ssh.Unmarshal(chReq.ExtraData(), &data); err != nil {
+		return errors.WithStack(err)
+	}
+
+	dest := net.JoinHostPort(data.DestAddr, strconv.Itoa(int(data.DestPort)))
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", dest)
+	if err != nil {
+		if err := chReq.Reject(ssh.ConnectionFailed, "connection failed"); err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	}
+	defer conn.Close()
+
+	ch, reqCh, err := chReq.Accept()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer ch.Close()
+
+	return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+		spawn("req", parallel.Exit, func(ctx context.Context) error {
+			ssh.DiscardRequests(reqCh)
+			return errors.WithStack(ctx.Err())
+		})
+		spawn("copy1", parallel.Fail, func(ctx context.Context) error {
+			defer ch.Close()
+			defer conn.Close()
+
+			_, err := io.Copy(conn, ch)
+			if ctx.Err() != nil {
+				return errors.WithStack(ctx.Err())
+			}
+			return errors.WithStack(err)
+		})
+		spawn("copy2", parallel.Fail, func(ctx context.Context) error {
+			defer ch.Close()
+			defer conn.Close()
+
+			_, err := io.Copy(ch, conn)
+			if ctx.Err() != nil {
+				return errors.WithStack(ctx.Err())
+			}
+			return errors.WithStack(err)
+		})
+
+		return errors.WithStack(ctx.Err())
+	})
+}
+
 type winSize struct {
 	Height uint16
 	Width  uint16
@@ -373,4 +436,11 @@ func unlock(f *os.File) error {
 		return errors.WithStack(err)
 	}
 	return nil
+}
+
+type directTCPData struct {
+	DestAddr   string
+	DestPort   uint32
+	OriginAddr string
+	OriginPort uint32
 }

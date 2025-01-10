@@ -14,7 +14,7 @@ func NewService(efiDevPath string) host.Service {
 	return host.Service{
 		Name:   "pxe",
 		OnExit: parallel.Fail,
-		TaskFn: func(ctx context.Context) error {
+		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
 			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 				spawn("dhcp6", parallel.Fail, dhcp6.Run)
 				spawn("tftp", parallel.Fail, tftp.NewRun(efiDevPath))

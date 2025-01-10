@@ -23,7 +23,7 @@ func NewPowerService() host.Service {
 	return host.Service{
 		Name:   "acpi-power",
 		OnExit: parallel.Fail,
-		TaskFn: func(ctx context.Context) error {
+		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
 			conn, err := genetlink.Dial(nil)
 			if err != nil {
 				return errors.WithStack(err)

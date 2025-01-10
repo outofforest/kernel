@@ -13,12 +13,10 @@ import (
 )
 
 const (
-	basePath       = "/usr/lib/modules"
-	fileBuiltIn    = "modules.builtin"
-	fileDeps       = "modules.dep"
-	fileAliases    = "modules.alias"
-	fileNetworking = "modules.networking"
-	fileLoaded     = "/proc/modules"
+	basePath    = "/usr/lib/modules"
+	fileBuiltIn = "modules.builtin"
+	fileDeps    = "modules.dep"
+	fileLoaded  = "/proc/modules"
 )
 
 // Module describes module to load.
@@ -31,7 +29,7 @@ type Module struct {
 func LoadModule(module Module) (retErr error) {
 	defer func() {
 		if retErr != nil {
-			retErr = errors.Wrapf(retErr, "loading module %q failed", module)
+			retErr = errors.Wrapf(retErr, "loading module %q failed", module.Name)
 		}
 	}()
 
@@ -41,10 +39,6 @@ func LoadModule(module Module) (retErr error) {
 	}
 
 	releaseBase := filepath.Join(basePath, release)
-	module.Name, err = resolveModuleAlias(module.Name, filepath.Join(releaseBase, fileAliases))
-	if err != nil {
-		return err
-	}
 
 	if isBuiltIn, err := isBuiltInModule(module.Name, filepath.Join(releaseBase, fileBuiltIn)); err != nil || isBuiltIn {
 		return err
@@ -75,44 +69,6 @@ func LoadModule(module Module) (retErr error) {
 	}
 
 	return nil
-}
-
-func resolveModuleAlias(module string, fileAliases string) (string, error) {
-	aliasF, err := os.Open(fileAliases)
-	if err != nil {
-		return "", errors.WithStack(err)
-	}
-	defer aliasF.Close()
-
-	reader := bufio.NewReader(aliasF)
-	for {
-		line, err := reader.ReadString('\n')
-		switch {
-		case err == nil:
-		case errors.Is(err, io.EOF):
-			return module, nil
-		default:
-			return "", errors.WithStack(err)
-		}
-
-		if len(line) == 0 || line[0] == '#' {
-			continue
-		}
-
-		spaceIndex := strings.Index(line, " ")
-		if spaceIndex < 0 {
-			continue
-		}
-		line = line[spaceIndex+1:]
-		spaceIndex = strings.Index(line, " ")
-		if spaceIndex < 0 {
-			continue
-		}
-		if line[:spaceIndex] != module {
-			continue
-		}
-		return strings.TrimSpace(line[spaceIndex+1:]), nil
-	}
 }
 
 func isBuiltInModule(module string, fileBuiltIn string) (bool, error) {

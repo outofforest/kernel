@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/beevik/ntp v1.4.3
+	github.com/cavaliergopher/cpio v1.0.1
 	github.com/cespare/xxhash v1.1.0
 	github.com/diskfs/go-diskfs v1.5.0
 	github.com/google/nftables v0.2.0
