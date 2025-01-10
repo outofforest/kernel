@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/outofforest/cloudless/pkg/acpi"
-	. "github.com/outofforest/cloudless/pkg/config"
+	. "github.com/outofforest/cloudless/pkg/config" //nolint:stylecheck
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/ntp"
 	"github.com/outofforest/cloudless/pkg/pxe"
