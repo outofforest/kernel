@@ -169,9 +169,6 @@ func runHost(ctx context.Context, h Host) error {
 	if err := configureNetworks(h.Networks); err != nil {
 		return err
 	}
-	if err := configureCloudlessRepo(); err != nil {
-		return err
-	}
 	if err := installPackages(ctx, h.Packages); err != nil {
 		return err
 	}
@@ -401,6 +398,14 @@ func installPackages(ctx context.Context, packages []string) error {
 		return nil
 	}
 
+	if err := os.WriteFile("/etc/yum.repos.d/cloudless.mirrors",
+		[]byte("http://10.0.0.100\n"), 0o600); err != nil {
+		return errors.WithStack(err)
+	}
+	if err := os.WriteFile("/etc/yum.repos.d/cloudless.repo", cloudlessRepo, 0o600); err != nil {
+		return errors.WithStack(err)
+	}
+
 	// TODO (wojciech): One day I will write an rpm package manager in go.
 	return libexec.Exec(ctx, exec.Command("dnf", append(
 		[]string{"install", "--refresh", "-y", "--setopt=keepcache=False", "--repo=cloudless"},
@@ -471,8 +476,4 @@ func removeOldRoot() error {
 		return errors.WithStack(err)
 	}
 	return errors.WithStack(os.RemoveAll("/oldroot"))
-}
-
-func configureCloudlessRepo() error {
-	return errors.WithStack(os.WriteFile("/etc/yum.repos.d/cloudless.repo", cloudlessRepo, 0o600))
 }
