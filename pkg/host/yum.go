@@ -7,8 +7,10 @@ func PackageListProvider(config *Config) func() []string {
 	return func() []string {
 		m := map[string]struct{}{}
 		for _, h := range config.Hosts {
-			for _, p := range h.Packages {
-				m[p] = struct{}{}
+			for _, s := range h.Services {
+				for _, p := range s.Packages {
+					m[p] = struct{}{}
+				}
 			}
 		}
 		packages := make([]string, 0, len(m))

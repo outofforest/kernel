@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"sync"
 	"syscall"
 
@@ -30,15 +31,15 @@ import (
 	"github.com/outofforest/parallel"
 )
 
-//go:embed cloudless.repo
-var cloudlessRepo []byte
-
 var (
 	// ErrPowerOff means that host should be powered off.
 	ErrPowerOff = errors.New("power off requested")
 
 	// ErrReboot means that host should be rebooted.
 	ErrReboot = errors.New("reboot requested")
+
+	//go:embed cloudless.repo
+	cloudlessRepo []byte
 )
 
 // Configurator allows service to configure the required host settings.
@@ -66,35 +67,34 @@ func (c *Configurator) AddFirewallRules(sources ...firewall.RuleSource) error {
 // Config contains configuration.
 type Config struct {
 	KernelModules []kernel.Module
-	Hosts         []Host
+	DNS           []net.IP
+	Services      []Service
+	Hosts         map[string]Host
 }
 
 // Host contains host configuration.
 type Host struct {
-	Hostname             string
-	KernelModules        []kernel.Module
-	EnableIPV4Forwarding bool
-	EnableIPV6Forwarding bool
-	CreateInitramfs      bool
-	Networks             []Network
-	DNS                  []net.IP
-	Packages             []string
-	Firewall             []firewall.RuleSource
-	Services             []Service
+	Gateway  net.IP
+	Networks []Network
+	Services []Service
 }
 
 // Network contains network configuration.
 type Network struct {
-	MAC     net.HardwareAddr
-	IPs     []net.IPNet
-	Gateway net.IP
+	MAC net.HardwareAddr
+	IPs []net.IPNet
 }
 
 // Service contains service configuration.
 type Service struct {
-	Name      string
-	OnExit    parallel.OnExit
-	ServiceFn func(ctx context.Context, configurator *Configurator) error
+	Name                 string
+	OnExit               parallel.OnExit
+	RequiresIPForwarding bool
+	RequiresInitramfs    bool
+	KernelModules        []kernel.Module
+	Packages             []string
+	Firewall             []firewall.RuleSource
+	ServiceFn            func(ctx context.Context, configurator *Configurator) error
 }
 
 // Run runs host system.
@@ -108,6 +108,9 @@ func Run(ctx context.Context, config Config) error {
 		}
 	}
 
+	if err := configureDNS(config.DNS); err != nil {
+		return err
+	}
 	if err := configureIPv6(); err != nil {
 		return err
 	}
@@ -119,10 +122,10 @@ func Run(ctx context.Context, config Config) error {
 
 	for _, l := range links {
 		hwAddr := l.Attrs().HardwareAddr
-		for _, hc := range config.Hosts {
+		for hn, hc := range config.Hosts {
 			for _, n := range hc.Networks {
 				if bytes.Equal(n.MAC, hwAddr) {
-					return runHost(ctx, hc)
+					return runHost(ctx, hn, config)
 				}
 			}
 		}
@@ -131,24 +134,37 @@ func Run(ctx context.Context, config Config) error {
 	return errors.Errorf("no matching link found")
 }
 
-func runHost(ctx context.Context, h Host) error {
-	ctx = logger.With(ctx, zap.String("host", h.Hostname))
+func runHost(ctx context.Context, hostname string, config Config) error {
+	ctx = logger.With(ctx, zap.String("host", hostname))
+	h := config.Hosts[hostname]
+	services := append(append([]Service{}, config.Services...), h.Services...)
 
-	if h.CreateInitramfs {
-		if err := buildInitramfs(); err != nil {
-			return err
-		}
+	if err := buildInitramfs(services); err != nil {
+		return err
 	}
 	if err := removeOldRoot(); err != nil {
 		return err
 	}
-	if err := configureEnv(h.Hostname); err != nil {
+	if err := configureEnv(hostname); err != nil {
 		return err
 	}
-	if err := configureHostname(h.Hostname); err != nil {
+	if err := configureHostname(hostname); err != nil {
 		return err
 	}
-	if err := configureKernelModules(h.KernelModules); err != nil {
+	if err := configureKernelModules(services); err != nil {
+		return err
+	}
+
+	if err := configureNetworks(h.Networks); err != nil {
+		return err
+	}
+	if err := configureGateway(h.Gateway); err != nil {
+		return err
+	}
+	if err := installPackages(ctx, services); err != nil {
+		return err
+	}
+	if err := configureIPForwarding(services); err != nil {
 		return err
 	}
 
@@ -159,35 +175,8 @@ func runHost(ctx context.Context, h Host) error {
 	configurator := &Configurator{
 		chains: chains,
 	}
-	if err := configurator.AddFirewallRules(h.Firewall...); err != nil {
-		return err
-	}
 
-	if err := configureDNS(h.DNS); err != nil {
-		return err
-	}
-	if err := configureNetworks(h.Networks); err != nil {
-		return err
-	}
-	if err := installPackages(ctx, h.Packages); err != nil {
-		return err
-	}
-
-	// FIXME (wojciech): Do it only for specific interface.
-	if h.EnableIPV4Forwarding {
-		if err := kernel.SetSysctl("net/ipv4/conf/all/forwarding", "1"); err != nil {
-			return err
-		}
-	}
-
-	// FIXME (wojciech): Do it only for specific interface.
-	if h.EnableIPV6Forwarding {
-		if err := kernel.SetSysctl("net/ipv6/conf/all/forwarding", "1"); err != nil {
-			return err
-		}
-	}
-
-	err = runServices(ctx, configurator, h.Services)
+	err = runServices(ctx, configurator, services)
 	switch {
 	case errors.Is(err, ErrPowerOff):
 		return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF))
@@ -198,10 +187,12 @@ func runHost(ctx context.Context, h Host) error {
 	}
 }
 
-func configureKernelModules(modules []kernel.Module) error {
-	for _, m := range modules {
-		if err := kernel.LoadModule(m); err != nil {
-			return err
+func configureKernelModules(services []Service) error {
+	for _, s := range services {
+		for _, m := range s.KernelModules {
+			if err := kernel.LoadModule(m); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -289,16 +280,6 @@ func configureNetwork(n Network, l netlink.Link) error {
 		}
 	}
 
-	if n.Gateway != nil {
-		if err := netlink.RouteAdd(&netlink.Route{
-			Scope:     netlink.SCOPE_UNIVERSE,
-			LinkIndex: l.Attrs().Index,
-			Gw:        n.Gateway,
-		}); err != nil {
-			return errors.WithStack(err)
-		}
-	}
-
 	if !ip6Found {
 		if err := kernel.SetSysctl(filepath.Join("net/ipv6/conf", lName, "disable_ipv6"), "1"); err != nil {
 			return err
@@ -306,6 +287,34 @@ func configureNetwork(n Network, l netlink.Link) error {
 	}
 
 	return nil
+}
+
+func configureGateway(gateway net.IP) error {
+	if gateway == nil {
+		return nil
+	}
+
+	links, err := netlink.LinkList()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	for _, l := range links {
+		ips, err := netlink.AddrList(l, netlink.FAMILY_V4)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		for _, ip := range ips {
+			if ip.IP.Mask(ip.Mask).To4().Equal(gateway.Mask(ip.Mask).To4()) {
+				return errors.WithStack(netlink.RouteAdd(&netlink.Route{
+					Scope:     netlink.SCOPE_UNIVERSE,
+					LinkIndex: l.Attrs().Index,
+					Gw:        gateway,
+				}))
+			}
+		}
+	}
+
+	return errors.Errorf("no link found for gateway %q", gateway)
 }
 
 func configureIPv6OnInterface(lName string) error {
@@ -355,6 +364,10 @@ func runServices(ctx context.Context, configurator *Configurator, services []Ser
 
 			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 				for _, s := range services {
+					if err := configurator.AddFirewallRules(s.Firewall...); err != nil {
+						return err
+					}
+
 					spawn(s.Name, s.OnExit, func(ctx context.Context) error {
 						ctx = logger.With(ctx, zap.String("service", s.Name))
 						log := logger.Get(ctx)
@@ -393,10 +406,24 @@ func configureEnv(hostname string) error {
 	return nil
 }
 
-func installPackages(ctx context.Context, packages []string) error {
-	if len(packages) == 0 {
+func installPackages(ctx context.Context, services []Service) error {
+	m := map[string]struct{}{}
+	for _, s := range services {
+		for _, p := range s.Packages {
+			m[p] = struct{}{}
+		}
+	}
+
+	if len(m) == 0 {
 		return nil
 	}
+
+	packages := make([]string, 0, len(m))
+	for p := range m {
+		packages = append(packages, p)
+	}
+
+	sort.Strings(packages)
 
 	if err := os.WriteFile("/etc/yum.repos.d/cloudless.mirrors",
 		[]byte("http://10.0.0.100\n"), 0o600); err != nil {
@@ -408,31 +435,52 @@ func installPackages(ctx context.Context, packages []string) error {
 
 	// TODO (wojciech): One day I will write an rpm package manager in go.
 	return libexec.Exec(ctx, exec.Command("dnf", append(
-		[]string{"install", "--refresh", "-y", "--setopt=keepcache=False", "--repo=cloudless"},
-		packages...,
-	)...))
+		[]string{"install", "-y", "--setopt=keepcache=False", "--repo=cloudless"}, packages...)...))
 }
 
-func buildInitramfs() error {
-	if err := os.MkdirAll("/boot", 0o555); err != nil {
-		return errors.WithStack(err)
-	}
-	dF, err := os.OpenFile("/boot/initramfs", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer dF.Close()
+func configureIPForwarding(services []Service) error {
+	for _, s := range services {
+		if !s.RequiresIPForwarding {
+			continue
+		}
 
-	cW := gzip.NewWriter(dF)
-	defer cW.Close()
-
-	w := cpio.NewWriter(cW)
-	defer w.Close()
-
-	if err := addFile(w, 0o600, "/oldroot/initramfs.tar"); err != nil {
-		return err
+		if err := kernel.SetSysctl("net/ipv4/conf/all/forwarding", "1"); err != nil {
+			return err
+		}
+		return errors.WithStack(kernel.SetSysctl("net/ipv6/conf/all/forwarding", "1"))
 	}
-	return addFile(w, 0o700, "/oldroot/init")
+
+	return nil
+}
+
+func buildInitramfs(services []Service) error {
+	for _, s := range services {
+		if !s.RequiresInitramfs {
+			continue
+		}
+
+		if err := os.MkdirAll("/boot", 0o555); err != nil {
+			return errors.WithStack(err)
+		}
+		dF, err := os.OpenFile("/boot/initramfs", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		defer dF.Close()
+
+		cW := gzip.NewWriter(dF)
+		defer cW.Close()
+
+		w := cpio.NewWriter(cW)
+		defer w.Close()
+
+		if err := addFile(w, 0o600, "/oldroot/initramfs.tar"); err != nil {
+			return err
+		}
+		return addFile(w, 0o700, "/oldroot/init")
+	}
+
+	return nil
 }
 
 func addFile(w *cpio.Writer, mode cpio.FileMode, file string) error {

@@ -13,8 +13,8 @@ import (
 //go:embed network.xml
 var internalNetworkDef []byte
 
-// CreateNATedNetwork creates NATed network.
-func CreateNATedNetwork() ObjectSource {
+// NATedNetwork creates NATed network.
+func NATedNetwork() ObjectSource {
 	return func(configurator *host.Configurator) error {
 		defaultIface, err := host.DefaultIface()
 		if err != nil {
