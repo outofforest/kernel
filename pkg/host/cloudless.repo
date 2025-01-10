@@ -1,6 +1,6 @@
 [cloudless]
 name=Cloudless
-baseurl=http://10.0.0.100
+mirrorlist=file:///etc/yum.repos.d/cloudless.mirrors
 enabled=0
 countme=1
 metadata_expire=7d
