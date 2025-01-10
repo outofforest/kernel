@@ -9,6 +9,7 @@ require (
 	github.com/diskfs/go-diskfs v1.5.0
 	github.com/google/nftables v0.2.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/handlers v1.5.2
 	github.com/mdlayher/genetlink v1.3.2
 	github.com/mdlayher/netlink v1.7.2
 	github.com/outofforest/libexec v0.3.9
@@ -16,6 +17,7 @@ require (
 	github.com/outofforest/parallel v0.2.3
 	github.com/outofforest/run v0.8.0
 	github.com/pkg/errors v0.9.1
+	github.com/ridge/must v0.6.0
 	github.com/samber/lo v1.47.0
 	github.com/stretchr/testify v1.9.0
 	github.com/ulikunitz/xz v0.5.12
@@ -30,6 +32,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/djherbis/times v1.6.0 // indirect
 	github.com/elliotwutingfeng/asciiset v0.0.0-20240214025120-24af97c84155 // indirect
+	github.com/felixge/httpsnoop v1.0.3 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect

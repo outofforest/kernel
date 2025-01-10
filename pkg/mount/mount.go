@@ -2,14 +2,12 @@ package mount
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 
-	"github.com/cavaliergopher/cpio"
 	"github.com/pkg/errors"
 )
 
@@ -68,17 +66,12 @@ func Root() error {
 		return err
 	}
 
-	if err := buildInitramfs(); err != nil {
-		return err
-	}
-
-	if err := os.Remove("/init"); err != nil {
+	if err := os.MkdirAll("/newroot/oldroot", 0o700); err != nil {
 		return errors.WithStack(err)
 	}
-	if err := os.Remove("/initramfs.tar"); err != nil {
+	if err := syscall.Mount("/", "/newroot/oldroot", "", syscall.MS_BIND, ""); err != nil {
 		return errors.WithStack(err)
 	}
-
 	if err := syscall.Mount("/newroot", "/", "", syscall.MS_MOVE, ""); err != nil {
 		return errors.WithStack(err)
 	}
@@ -96,25 +89,6 @@ func Root() error {
 		return err
 	}
 	return DevPtsFS("/dev/pts")
-}
-
-func buildInitramfs() error {
-	dF, err := os.OpenFile("/newroot/initramfs", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer dF.Close()
-
-	cW := gzip.NewWriter(dF)
-	defer cW.Close()
-
-	w := cpio.NewWriter(cW)
-	defer w.Close()
-
-	if err := addFile(w, 0o600, "/initramfs.tar"); err != nil {
-		return err
-	}
-	return addFile(w, 0o700, "/init")
 }
 
 func untarInitramfs() error {
@@ -202,31 +176,4 @@ func untar(reader io.Reader) error {
 
 func ensureDir(file string) error {
 	return errors.WithStack(os.MkdirAll(filepath.Dir(file), 0o700))
-}
-
-func addFile(w *cpio.Writer, mode cpio.FileMode, file string) error {
-	f, err := os.Open(file)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer f.Close()
-
-	size, err := f.Seek(0, io.SeekEnd)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return errors.WithStack(err)
-	}
-
-	if err := w.WriteHeader(&cpio.Header{
-		Name: filepath.Base(file),
-		Size: size,
-		Mode: mode,
-	}); err != nil {
-		return errors.WithStack(err)
-	}
-
-	_, err = io.Copy(w, f)
-	return errors.WithStack(err)
 }

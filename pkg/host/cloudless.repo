@@ -1,0 +1,10 @@
+[cloudless]
+name=Cloudless
+baseurl=http://10.0.0.100
+enabled=0
+countme=1
+metadata_expire=7d
+repo_gpgcheck=0
+type=rpm
+gpgcheck=0
+skip_if_unavailable=True

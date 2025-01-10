@@ -14,7 +14,7 @@
         <loader readonly="yes" type="pflash">/usr/share/edk2/ovmf/OVMF_CODE.fd</loader>
         <nvram template="/usr/share/edk2/ovmf/OVMF_VARS.fd">/var/lib/libvirt/qemu/nvram/vm-pxe@hzleb_VARS.fd</nvram>
         <kernel>/usr/lib/modules/6.12.8-200.fc41.x86_64/vmlinuz</kernel>
-        <initrd>/initramfs</initrd>
+        <initrd>/boot/initramfs</initrd>
         <cmdline>selinux=0 default_hugepagesz=1G audit=0</cmdline>
         <boot dev="hd"/>
     </os>
