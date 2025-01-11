@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/cavaliergopher/cpio"
@@ -119,6 +120,7 @@ func NewSubconfiguration(c *Configuration) (*Configuration, func()) {
 			c.SetGateway(c2.gateway)
 		}
 		c.AddDNSes(c2.dnses...)
+		c.AddRepoMirrors(c2.repoMirrors...)
 		c.AddNetworks(c2.networks...)
 		c.AddFirewallRules(c2.firewall...)
 		c.Prepare(c2.prepare...)
@@ -138,6 +140,7 @@ type Configuration struct {
 	hostname            string
 	gateway             net.IP
 	dnses               []net.IP
+	repoMirrors         []string
 	networks            []NetworkConfig
 	firewall            []firewall.RuleSource
 	prepare             []PrepareFn
@@ -189,6 +192,11 @@ func (c *Configuration) SetGateway(gateway net.IP) {
 // AddDNSes adds DNS servers.
 func (c *Configuration) AddDNSes(dnses ...net.IP) {
 	c.dnses = append(c.dnses, dnses...)
+}
+
+// AddRepoMirrors adds package repository mirrors.
+func (c *Configuration) AddRepoMirrors(mirrors ...string) {
+	c.repoMirrors = append(c.repoMirrors, mirrors...)
 }
 
 // AddNetworks configures networks.
@@ -277,7 +285,7 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 	if err := configureFirewall(cfg.firewall); err != nil {
 		return err
 	}
-	if err := installPackages(ctx, cfg.packages); err != nil {
+	if err := installPackages(ctx, cfg.repoMirrors, cfg.packages); err != nil {
 		return err
 	}
 	if cfg.requireVirt {
@@ -531,7 +539,7 @@ func configureEnv(hostname string) error {
 	return nil
 }
 
-func installPackages(ctx context.Context, packages []string) error {
+func installPackages(ctx context.Context, repoMirrors, packages []string) error {
 	m := map[string]struct{}{}
 	for _, p := range packages {
 		m[p] = struct{}{}
@@ -549,7 +557,7 @@ func installPackages(ctx context.Context, packages []string) error {
 	sort.Strings(pkgs)
 
 	if err := os.WriteFile("/etc/yum.repos.d/cloudless.mirrors",
-		[]byte("http://10.0.0.100\n"), 0o600); err != nil {
+		[]byte(strings.Join(repoMirrors, "\n")), 0o600); err != nil {
 		return errors.WithStack(err)
 	}
 	if err := os.WriteFile("/etc/yum.repos.d/cloudless.repo", cloudlessRepo, 0o600); err != nil {
