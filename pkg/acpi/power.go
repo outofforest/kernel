@@ -18,44 +18,47 @@ const (
 	acpiGenlMcastGroupName = "acpi_mc_group"
 )
 
-// NewPowerService creates new ACPI service for powering off and rebooting the host.
-func NewPowerService() host.Service {
-	return host.Service{
-		Name:   "acpi-power",
-		OnExit: parallel.Fail,
-		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
-			conn, err := genetlink.Dial(nil)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			defer conn.Close()
+// PowerService creates new ACPI service for powering off and rebooting the host.
+func PowerService() host.Configurator {
+	return func(c *host.Configuration) error {
+		c.StartServices(host.ServiceConfig{
+			Name:   "acpi-power",
+			OnExit: parallel.Fail,
+			TaskFn: func(ctx context.Context) error {
+				conn, err := genetlink.Dial(nil)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+				defer conn.Close()
 
-			if err := subscribe(conn); err != nil {
-				return err
-			}
+				if err := subscribe(conn); err != nil {
+					return err
+				}
 
-			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
-				spawn("watchdog", parallel.Fail, func(ctx context.Context) error {
-					<-ctx.Done()
-					_ = conn.Close()
-					return errors.WithStack(ctx.Err())
-				})
-				spawn("client", parallel.Fail, func(ctx context.Context) error {
-					for {
-						msgs, _, err := conn.Receive()
-						if err != nil {
-							return errors.WithStack(err)
+				return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+					spawn("watchdog", parallel.Fail, func(ctx context.Context) error {
+						<-ctx.Done()
+						_ = conn.Close()
+						return errors.WithStack(ctx.Err())
+					})
+					spawn("client", parallel.Fail, func(ctx context.Context) error {
+						for {
+							msgs, _, err := conn.Receive()
+							if err != nil {
+								return errors.WithStack(err)
+							}
+
+							if err := react(msgs); err != nil {
+								return errors.WithStack(err)
+							}
 						}
+					})
 
-						if err := react(msgs); err != nil {
-							return errors.WithStack(err)
-						}
-					}
+					return nil
 				})
-
-				return nil
-			})
-		},
+			},
+		})
+		return nil
 	}
 }
 

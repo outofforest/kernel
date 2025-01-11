@@ -52,7 +52,12 @@ func LoadModule(module Module) (retErr error) {
 	var params string
 	for i := len(modulesToLoad) - 1; i >= 0; i-- {
 		m := modulesToLoad[i]
-		loaded, err := isLoaded(m, fileLoaded)
+		mName := filepath.Base(m)
+		if dotIndex := strings.Index(mName, "."); dotIndex >= 0 {
+			mName = mName[:dotIndex]
+		}
+
+		loaded, err := isLoaded(mName, fileLoaded)
 		if err != nil {
 			return err
 		}

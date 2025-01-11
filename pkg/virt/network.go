@@ -1,6 +1,7 @@
 package virt
 
 import (
+	"context"
 	_ "embed"
 	"os"
 
@@ -8,30 +9,34 @@ import (
 
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
+	"github.com/outofforest/cloudless/pkg/kernel"
 )
 
 //go:embed network.xml
 var internalNetworkDef []byte
 
 // NATedNetwork creates NATed network.
-func NATedNetwork() ObjectSource {
-	return func(configurator *host.Configurator) error {
-		defaultIface, err := host.DefaultIface()
-		if err != nil {
-			return err
-		}
-		if err := configurator.AddFirewallRules(
+func NATedNetwork() host.Configurator {
+	return func(c *host.Configuration) error {
+		c.AddFirewallRules(
 			firewall.ForwardTo("virint"),
 			firewall.ForwardFrom("virint"),
-			firewall.Masquerade("virint", defaultIface),
-		); err != nil {
-			return err
-		}
+			firewall.Masquerade("virint"),
+		)
+		c.RequireIPForwarding()
+		c.RequireVirt()
+		c.RequireKernelModules(kernel.Module{
+			Name: "tun",
+		})
+		c.Prepare(func(_ context.Context) error {
+			if err := os.WriteFile("/etc/libvirt/qemu/networks/internal.xml", internalNetworkDef,
+				0o600); err != nil {
+				return errors.WithStack(err)
+			}
+			return errors.WithStack(os.Link("/etc/libvirt/qemu/networks/internal.xml",
+				"/etc/libvirt/qemu/networks/autostart/internal.xml"))
+		})
 
-		if err := os.WriteFile("/etc/libvirt/qemu/networks/internal.xml", internalNetworkDef, 0o600); err != nil {
-			return errors.WithStack(err)
-		}
-		return errors.WithStack(os.Link("/etc/libvirt/qemu/networks/internal.xml",
-			"/etc/libvirt/qemu/networks/autostart/internal.xml"))
+		return nil
 	}
 }
