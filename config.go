@@ -13,6 +13,24 @@ import (
 	"github.com/outofforest/cloudless/pkg/parse"
 )
 
+var (
+	// DefaultKernelModules is the reasonable list of kernel modules providing networking and storage.
+	DefaultKernelModules = []kernel.Module{
+		// Networking.
+		{Name: "virtio_net"},
+		{Name: "vhost_net"},
+
+		// Storage.
+		{Name: "virtio_scsi"},
+	}
+
+	// DefaultDNS is the list of default DNS servers.
+	DefaultDNS = []string{
+		"1.1.1.1",
+		"8.8.8.8",
+	}
+)
+
 // Deployment converts inlined spec into a slice.
 func Deployment(configurators ...host.Configurator) []host.Configurator {
 	return configurators
@@ -121,19 +139,4 @@ func RepoMirrors(mirrors ...string) host.Configurator {
 		c.AddRepoMirrors(mirrors...)
 		return nil
 	}
-}
-
-// DefaultKernelModules is the reasonable list of kernel modules providing networking and storage.
-var DefaultKernelModules = []kernel.Module{
-	// Networking.
-	{Name: "virtio_net"},
-
-	// Storage.
-	{Name: "virtio_scsi"},
-}
-
-// DefaultDNS is the list of default DNS servers.
-var DefaultDNS = []string{
-	"1.1.1.1",
-	"8.8.8.8",
 }

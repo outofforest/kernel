@@ -668,6 +668,16 @@ func setupVirt(c *Configuration) {
 		Name:   "virt",
 		OnExit: parallel.Fail,
 		TaskFn: func(ctx context.Context) error {
+			configF, err := os.OpenFile("/etc/libvirt/qemu.conf", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			defer configF.Close()
+
+			if _, err := configF.WriteString("\nuser = \"root\"\ngroup = \"root\"\n"); err != nil {
+				return errors.WithStack(err)
+			}
+
 			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 				for _, c := range []string{"virtqemud", "virtlogd", "virtstoraged", "virtnetworkd", "virtnodedevd"} {
 					spawn(c, parallel.Fail, func(ctx context.Context) error {
@@ -682,16 +692,6 @@ func setupVirt(c *Configuration) {
 }
 
 func pruneVirt() error {
-	configF, err := os.OpenFile("/etc/libvirt/qemu.conf", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	defer configF.Close()
-
-	if _, err := configF.WriteString("\nuser = \"root\"\ngroup = \"root\"\n"); err != nil {
-		return errors.WithStack(err)
-	}
-
 	return errors.WithStack(filepath.WalkDir("/etc/libvirt/qemu", func(path string, d os.DirEntry, err error) error {
 		if !d.IsDir() {
 			return os.Remove(path)
