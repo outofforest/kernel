@@ -116,6 +116,14 @@ func DNS(dns ...string) host.Configurator {
 	}
 }
 
+// RepoMirrors defines package repository mirrors.
+func RepoMirrors(mirrors ...string) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.AddRepoMirrors(mirrors...)
+		return nil
+	}
+}
+
 // DefaultKernelModules is the reasonable list of kernel modules providing networking and storage.
 var DefaultKernelModules = []kernel.Module{
 	// Networking.
