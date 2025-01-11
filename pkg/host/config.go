@@ -13,12 +13,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
-	"sync"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/cavaliergopher/cpio"
 	"github.com/google/nftables"
 	"github.com/pkg/errors"
+	"github.com/samber/lo"
 	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
 
@@ -42,141 +44,217 @@ var (
 	cloudlessRepo []byte
 )
 
-// Configurator allows service to configure the required host settings.
-type Configurator struct {
-	mu     sync.Mutex
-	chains firewall.Chains
-}
-
-// AddFirewallRules add firewall rules.
-func (c *Configurator) AddFirewallRules(sources ...firewall.RuleSource) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	conn := &nftables.Conn{}
-
-	for _, s := range sources {
-		for _, r := range s(c.chains) {
-			r.Table = r.Chain.Table
-			conn.AddRule(r)
-		}
-	}
-	return errors.WithStack(conn.Flush())
-}
-
-// Config contains configuration.
-type Config struct {
-	KernelModules []kernel.Module
-	DNS           []net.IP
-	Services      []Service
-	Hosts         map[string]Host
-}
-
-// Host contains host configuration.
-type Host struct {
-	Gateway  net.IP
-	Networks []Network
-	Services []Service
-}
-
-// Network contains network configuration.
-type Network struct {
+// NetworkConfig contains network configuration.
+type NetworkConfig struct {
 	MAC net.HardwareAddr
 	IPs []net.IPNet
 }
 
-// Service contains service configuration.
-type Service struct {
-	Name                 string
-	OnExit               parallel.OnExit
-	RequiresIPForwarding bool
-	RequiresInitramfs    bool
-	KernelModules        []kernel.Module
-	Packages             []string
-	Firewall             []firewall.RuleSource
-	ServiceFn            func(ctx context.Context, configurator *Configurator) error
+// ServiceConfig contains service configuration.
+type ServiceConfig struct {
+	Name   string
+	OnExit parallel.OnExit
+	TaskFn parallel.Task
 }
 
-// Run runs host system.
-func Run(ctx context.Context, config Config) error {
+func newPackageRepo() *packageRepo {
+	return &packageRepo{
+		packages: map[string]struct{}{},
+	}
+}
+
+type packageRepo struct {
+	packages map[string]struct{}
+}
+
+func (pr *packageRepo) Packages() []string {
+	packages := make([]string, 0, len(pr.packages))
+	for pkg := range pr.packages {
+		packages = append(packages, pkg)
+	}
+
+	sort.Strings(packages)
+	return packages
+}
+
+func (pr *packageRepo) Register(packages []string) {
+	for _, pkg := range packages {
+		pr.packages[pkg] = struct{}{}
+	}
+}
+
+// PrepareFn is the function type used to register functions preparing host.
+type PrepareFn func(ctx context.Context) error
+
+// Configuration allows service to configure the required host settings.
+type Configuration struct {
+	pkgRepo *packageRepo
+
+	requireIPForwarding bool
+	requireInitramfs    bool
+	requireVirt         bool
+	kernelModules       []kernel.Module
+	packages            []string
+	hostname            string
+	gateway             net.IP
+	dnses               []net.IP
+	networks            []NetworkConfig
+	firewall            []firewall.RuleSource
+	prepare             []PrepareFn
+	services            []ServiceConfig
+}
+
+// RequireIPForwarding is called if host requires IP forwarding to be enabled.
+func (c *Configuration) RequireIPForwarding() {
+	c.requireIPForwarding = true
+}
+
+// RequireInitramfs is called if host requires initramfs to be generated.
+func (c *Configuration) RequireInitramfs() {
+	c.requireInitramfs = true
+}
+
+// RequireVirt is called if host requires virtualization services.
+func (c *Configuration) RequireVirt() {
+	c.requireVirt = true
+	c.pkgRepo.Register(virtPackages)
+}
+
+// RequireKernelModules is called to load kernel modules.
+func (c *Configuration) RequireKernelModules(kernelModules ...kernel.Module) {
+	c.kernelModules = append(c.kernelModules, kernelModules...)
+}
+
+// Packages returns the list of packages configured for any host.
+func (c *Configuration) Packages() []string {
+	return c.pkgRepo.Packages()
+}
+
+// RequirePackages is called to install packages.
+func (c *Configuration) RequirePackages(packages ...string) {
+	c.pkgRepo.Register(packages)
+	c.packages = append(c.packages, packages...)
+}
+
+// SetHostname sets hostname.
+func (c *Configuration) SetHostname(hostname string) {
+	c.hostname = hostname
+}
+
+// SetGateway sets gateway.
+func (c *Configuration) SetGateway(gateway net.IP) {
+	c.gateway = gateway
+}
+
+// AddDNSes adds DNS servers.
+func (c *Configuration) AddDNSes(dnses ...net.IP) {
+	c.dnses = append(c.dnses, dnses...)
+}
+
+// AddNetworks configures networks.
+func (c *Configuration) AddNetworks(networks ...NetworkConfig) {
+	c.networks = append(c.networks, networks...)
+}
+
+// AddFirewallRules add firewall rules.
+func (c *Configuration) AddFirewallRules(sources ...firewall.RuleSource) {
+	c.firewall = append(c.firewall, sources...)
+}
+
+// Prepare adds prepare function to be called.
+func (c *Configuration) Prepare(prepares ...PrepareFn) {
+	c.prepare = append(c.prepare, prepares...)
+}
+
+// StartServices configures services to be started on host.
+func (c *Configuration) StartServices(services ...ServiceConfig) {
+	c.services = append(c.services, services...)
+}
+
+// Configurator is the function called to collect host configuration.
+type Configurator func(c *Configuration) error
+
+// Run runs host.
+func Run(ctx context.Context, configurators ...Configurator) error {
 	if err := mount.Root(); err != nil {
 		return err
 	}
-	for _, m := range config.KernelModules {
-		if err := kernel.LoadModule(m); err != nil {
+
+	cfg := &Configuration{
+		pkgRepo: newPackageRepo(),
+	}
+	var hostFound bool
+	for _, c := range configurators {
+		err := c(cfg)
+		switch {
+		case err == nil:
+		case errors.Is(err, errHostFound):
+			hostFound = true
+		default:
 			return err
 		}
 	}
 
-	if err := configureDNS(config.DNS); err != nil {
+	if !hostFound {
+		return errors.New("host does not match the configuration")
+	}
+
+	ctx = logger.With(ctx, zap.String("host", cfg.hostname))
+
+	if cfg.requireVirt {
+		setupVirt(cfg)
+	}
+
+	if cfg.requireInitramfs {
+		if err := buildInitramfs(); err != nil {
+			return err
+		}
+	}
+	if err := removeOldRoot(); err != nil {
+		return err
+	}
+	if err := configureKernelModules(cfg.kernelModules); err != nil {
+		return err
+	}
+	if err := configureDNS(cfg.dnses); err != nil {
 		return err
 	}
 	if err := configureIPv6(); err != nil {
 		return err
 	}
-
-	links, err := netlink.LinkList()
-	if err != nil {
-		return errors.WithStack(err)
+	if err := configureEnv(cfg.hostname); err != nil {
+		return err
 	}
-
-	for _, l := range links {
-		hwAddr := l.Attrs().HardwareAddr
-		for hn, hc := range config.Hosts {
-			for _, n := range hc.Networks {
-				if bytes.Equal(n.MAC, hwAddr) {
-					return runHost(ctx, hn, config)
-				}
-			}
+	if err := configureHostname(cfg.hostname); err != nil {
+		return err
+	}
+	if err := configureNetworks(cfg.networks); err != nil {
+		return err
+	}
+	if err := configureGateway(cfg.gateway); err != nil {
+		return err
+	}
+	if err := configureFirewall(cfg.firewall); err != nil {
+		return err
+	}
+	if err := installPackages(ctx, cfg.packages); err != nil {
+		return err
+	}
+	if cfg.requireVirt {
+		if err := pruneVirt(); err != nil {
+			return err
 		}
 	}
-
-	return errors.Errorf("no matching link found")
-}
-
-func runHost(ctx context.Context, hostname string, config Config) error {
-	ctx = logger.With(ctx, zap.String("host", hostname))
-	h := config.Hosts[hostname]
-	services := append(append([]Service{}, config.Services...), h.Services...)
-
-	if err := buildInitramfs(services); err != nil {
-		return err
+	if cfg.requireIPForwarding {
+		if err := configureIPForwarding(); err != nil {
+			return err
+		}
 	}
-	if err := removeOldRoot(); err != nil {
-		return err
-	}
-	if err := configureEnv(hostname); err != nil {
-		return err
-	}
-	if err := configureHostname(hostname); err != nil {
-		return err
-	}
-	if err := configureKernelModules(services); err != nil {
+	if err := runPrepares(ctx, cfg.prepare); err != nil {
 		return err
 	}
 
-	if err := configureNetworks(h.Networks); err != nil {
-		return err
-	}
-	if err := configureGateway(h.Gateway); err != nil {
-		return err
-	}
-	if err := installPackages(ctx, services); err != nil {
-		return err
-	}
-	if err := configureIPForwarding(services); err != nil {
-		return err
-	}
-
-	chains, err := firewall.EnsureChains()
-	if err != nil {
-		return err
-	}
-	configurator := &Configurator{
-		chains: chains,
-	}
-
-	err = runServices(ctx, configurator, services)
+	err := runServices(ctx, cfg.services)
 	switch {
 	case errors.Is(err, ErrPowerOff):
 		return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF))
@@ -187,12 +265,213 @@ func runHost(ctx context.Context, hostname string, config Config) error {
 	}
 }
 
-func configureKernelModules(services []Service) error {
-	for _, s := range services {
-		for _, m := range s.KernelModules {
-			if err := kernel.LoadModule(m); err != nil {
+var (
+	errNotThisHost = errors.New("not this host")
+	errHostFound   = errors.New("host found")
+)
+
+// Host defines host configuration.
+func Host(hostname string, configurators ...Configurator) Configurator {
+	return func(c *Configuration) error {
+		cfg := &Configuration{
+			pkgRepo: c.pkgRepo,
+		}
+
+		var notThisHost bool
+		for _, configurator := range configurators {
+			err := configurator(cfg)
+			switch {
+			case err == nil:
+			case errors.Is(err, errNotThisHost):
+				notThisHost = true
+			default:
 				return err
 			}
+		}
+
+		// This is done like this to register all the required packages in the repo and don't skip anything.
+		if notThisHost {
+			return nil
+		}
+
+		if cfg.requireIPForwarding {
+			c.RequireIPForwarding()
+		}
+		if cfg.requireInitramfs {
+			c.RequireInitramfs()
+		}
+		if cfg.requireVirt {
+			c.RequireVirt()
+		}
+		c.RequireKernelModules(cfg.kernelModules...)
+		c.RequirePackages(cfg.packages...)
+		c.SetHostname(hostname)
+		if cfg.gateway != nil {
+			c.SetGateway(cfg.gateway)
+		}
+		c.AddDNSes(cfg.dnses...)
+		c.AddNetworks(cfg.networks...)
+		c.AddFirewallRules(cfg.firewall...)
+		c.Prepare(cfg.prepare...)
+		c.StartServices(cfg.services...)
+
+		return errHostFound
+	}
+}
+
+// Gateway defines gateway.
+func Gateway(gateway string) Configurator {
+	ip := parseIP4(gateway)
+	return func(c *Configuration) error {
+		c.SetGateway(ip)
+		return nil
+	}
+}
+
+// Network defines network.
+func Network(mac string, ips ...string) Configurator {
+	n := NetworkConfig{
+		MAC: parseMAC(mac),
+		IPs: make([]net.IPNet, 0, len(ips)),
+	}
+	for _, ip := range ips {
+		if strings.Contains(ip, ".") {
+			n.IPs = append(n.IPs, parseIPNet4(ip))
+		} else {
+			n.IPs = append(n.IPs, parseIPNet6(ip))
+		}
+	}
+
+	return func(c *Configuration) error {
+		links, err := netlink.LinkList()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		for _, l := range links {
+			if bytes.Equal(n.MAC, l.Attrs().HardwareAddr) {
+				c.AddNetworks(n)
+				return nil
+			}
+		}
+
+		return errNotThisHost
+	}
+}
+
+// KernelModules defines kernel modules to load.
+func KernelModules(modules ...kernel.Module) Configurator {
+	return func(c *Configuration) error {
+		c.RequireKernelModules(modules...)
+		return nil
+	}
+}
+
+// ImmediateKernelModules load kernel modules immediately.
+func ImmediateKernelModules(modules ...kernel.Module) Configurator {
+	return func(_ *Configuration) error {
+		return configureKernelModules(modules)
+	}
+}
+
+// DNS defines DNS servers.
+func DNS(dns ...string) Configurator {
+	ips := make([]net.IP, 0, len(dns))
+	for _, d := range dns {
+		ips = append(ips, parseIP4(d))
+	}
+
+	return func(c *Configuration) error {
+		c.AddDNSes(ips...)
+		return nil
+	}
+}
+
+// DefaultKernelModules is the reasonable list of kernel modules providing networking and storage.
+var DefaultKernelModules = []kernel.Module{
+	// Networking.
+	{Name: "virtio_net"},
+
+	// Storage.
+	{Name: "virtio_scsi"},
+}
+
+// DefaultDNS is the list of default DNS servers.
+var DefaultDNS = []string{
+	"1.1.1.1",
+	"8.8.8.8",
+}
+
+func parseMAC(mac string) net.HardwareAddr {
+	return lo.Must(net.ParseMAC(mac))
+}
+
+func parseIP4(ip string) net.IP {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		panic(errors.New("invalid IP address"))
+	}
+	parsedIP = parsedIP.To4()
+	if parsedIP == nil {
+		panic(errors.New("not an IPNet4 address"))
+	}
+
+	return parsedIP
+}
+
+func parseIP6(ip string) net.IP {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		panic(errors.New("invalid IP address"))
+	}
+
+	return parsedIP
+}
+
+func parseIPNet4(ip string) net.IPNet {
+	parts := strings.Split(ip, "/")
+	if len(parts) != 2 {
+		panic(errors.New("invalid IP address"))
+	}
+
+	maskBits, err := strconv.Atoi(parts[1])
+	if err != nil {
+		panic(err)
+	}
+	if maskBits < 0 || maskBits > 32 {
+		panic(errors.New("invalid IP address"))
+	}
+
+	return net.IPNet{
+		IP:   parseIP4(parts[0]),
+		Mask: net.CIDRMask(maskBits, 32),
+	}
+}
+
+func parseIPNet6(ip string) net.IPNet {
+	parts := strings.Split(ip, "/")
+	if len(parts) != 2 {
+		panic(errors.New("invalid IP address"))
+	}
+
+	maskBits, err := strconv.Atoi(parts[1])
+	if err != nil {
+		panic(err)
+	}
+	if maskBits < 0 || maskBits > 128 {
+		panic(errors.New("invalid IP address"))
+	}
+
+	return net.IPNet{
+		IP:   parseIP6(parts[0]),
+		Mask: net.CIDRMask(maskBits, 128),
+	}
+}
+
+func configureKernelModules(kernelModules []kernel.Module) error {
+	for _, m := range kernelModules {
+		if err := kernel.LoadModule(m); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -218,7 +497,7 @@ func configureDNS(dns []net.IP) error {
 	return nil
 }
 
-func configureNetworks(networks []Network) error {
+func configureNetworks(networks []NetworkConfig) error {
 	if err := configureLoopback(); err != nil {
 		return err
 	}
@@ -235,6 +514,7 @@ func configureNetworks(networks []Network) error {
 				if err := configureNetwork(n, l); err != nil {
 					return err
 				}
+				fmt.Println("network configured")
 				found = true
 				break
 			}
@@ -258,7 +538,7 @@ func configureLoopback() error {
 	return errors.WithStack(netlink.LinkSetUp(lo))
 }
 
-func configureNetwork(n Network, l netlink.Link) error {
+func configureNetwork(n NetworkConfig, l netlink.Link) error {
 	lName := l.Attrs().Name
 	if err := configureIPv6OnInterface(lName); err != nil {
 		return err
@@ -293,6 +573,8 @@ func configureGateway(gateway net.IP) error {
 	if gateway == nil {
 		return nil
 	}
+
+	fmt.Println("gateway configured")
 
 	links, err := netlink.LinkList()
 	if err != nil {
@@ -346,7 +628,16 @@ func configureIPv6() error {
 	return kernel.SetSysctl("net/ipv6/conf/all/accept_ra", "0")
 }
 
-func runServices(ctx context.Context, configurator *Configurator, services []Service) error {
+func runPrepares(ctx context.Context, prepare []PrepareFn) error {
+	for _, p := range prepare {
+		if err := p(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runServices(ctx context.Context, services []ServiceConfig) error {
 	if len(services) == 0 {
 		return errors.New("no services defined")
 	}
@@ -364,10 +655,6 @@ func runServices(ctx context.Context, configurator *Configurator, services []Ser
 
 			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 				for _, s := range services {
-					if err := configurator.AddFirewallRules(s.Firewall...); err != nil {
-						return err
-					}
-
 					spawn(s.Name, s.OnExit, func(ctx context.Context) error {
 						ctx = logger.With(ctx, zap.String("service", s.Name))
 						log := logger.Get(ctx)
@@ -375,7 +662,7 @@ func runServices(ctx context.Context, configurator *Configurator, services []Ser
 						log.Info("Starting service")
 						defer log.Info("Service stopped")
 
-						return s.ServiceFn(ctx, configurator)
+						return s.TaskFn(ctx)
 					})
 				}
 				return nil
@@ -406,24 +693,22 @@ func configureEnv(hostname string) error {
 	return nil
 }
 
-func installPackages(ctx context.Context, services []Service) error {
+func installPackages(ctx context.Context, packages []string) error {
 	m := map[string]struct{}{}
-	for _, s := range services {
-		for _, p := range s.Packages {
-			m[p] = struct{}{}
-		}
+	for _, p := range packages {
+		m[p] = struct{}{}
 	}
 
 	if len(m) == 0 {
 		return nil
 	}
 
-	packages := make([]string, 0, len(m))
+	pkgs := make([]string, 0, len(m))
 	for p := range m {
-		packages = append(packages, p)
+		pkgs = append(pkgs, p)
 	}
 
-	sort.Strings(packages)
+	sort.Strings(pkgs)
 
 	if err := os.WriteFile("/etc/yum.repos.d/cloudless.mirrors",
 		[]byte("http://10.0.0.100\n"), 0o600); err != nil {
@@ -435,52 +720,36 @@ func installPackages(ctx context.Context, services []Service) error {
 
 	// TODO (wojciech): One day I will write an rpm package manager in go.
 	return libexec.Exec(ctx, exec.Command("dnf", append(
-		[]string{"install", "-y", "--setopt=keepcache=False", "--repo=cloudless"}, packages...)...))
+		[]string{"install", "-y", "--setopt=keepcache=False", "--repo=cloudless"}, pkgs...)...))
 }
 
-func configureIPForwarding(services []Service) error {
-	for _, s := range services {
-		if !s.RequiresIPForwarding {
-			continue
-		}
-
-		if err := kernel.SetSysctl("net/ipv4/conf/all/forwarding", "1"); err != nil {
-			return err
-		}
-		return errors.WithStack(kernel.SetSysctl("net/ipv6/conf/all/forwarding", "1"))
+func configureIPForwarding() error {
+	if err := kernel.SetSysctl("net/ipv4/conf/all/forwarding", "1"); err != nil {
+		return err
 	}
-
-	return nil
+	return errors.WithStack(kernel.SetSysctl("net/ipv6/conf/all/forwarding", "1"))
 }
 
-func buildInitramfs(services []Service) error {
-	for _, s := range services {
-		if !s.RequiresInitramfs {
-			continue
-		}
-
-		if err := os.MkdirAll("/boot", 0o555); err != nil {
-			return errors.WithStack(err)
-		}
-		dF, err := os.OpenFile("/boot/initramfs", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		defer dF.Close()
-
-		cW := gzip.NewWriter(dF)
-		defer cW.Close()
-
-		w := cpio.NewWriter(cW)
-		defer w.Close()
-
-		if err := addFile(w, 0o600, "/oldroot/initramfs.tar"); err != nil {
-			return err
-		}
-		return addFile(w, 0o700, "/oldroot/init")
+func buildInitramfs() error {
+	if err := os.MkdirAll("/boot", 0o555); err != nil {
+		return errors.WithStack(err)
 	}
+	dF, err := os.OpenFile("/boot/initramfs", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer dF.Close()
 
-	return nil
+	cW := gzip.NewWriter(dF)
+	defer cW.Close()
+
+	w := cpio.NewWriter(cW)
+	defer w.Close()
+
+	if err := addFile(w, 0o600, "/oldroot/initramfs.tar"); err != nil {
+		return err
+	}
+	return addFile(w, 0o700, "/oldroot/init")
 }
 
 func addFile(w *cpio.Writer, mode cpio.FileMode, file string) error {
@@ -524,4 +793,71 @@ func removeOldRoot() error {
 		return errors.WithStack(err)
 	}
 	return errors.WithStack(os.RemoveAll("/oldroot"))
+}
+
+func configureFirewall(sources []firewall.RuleSource) error {
+	chains, err := firewall.EnsureChains()
+	if err != nil {
+		return err
+	}
+
+	conn := &nftables.Conn{}
+
+	for _, s := range sources {
+		rules, err := s(chains)
+		if err != nil {
+			return err
+		}
+		for _, r := range rules {
+			r.Table = r.Chain.Table
+			conn.AddRule(r)
+		}
+	}
+	return errors.WithStack(conn.Flush())
+}
+
+var virtPackages = []string{
+	"libvirt-daemon-config-network",
+	"libvirt-daemon-kvm",
+	"qemu-kvm",
+	"qemu-virtiofsd",
+	"libvirt-nss",
+}
+
+func setupVirt(c *Configuration) {
+	c.RequirePackages(virtPackages...)
+	c.StartServices(ServiceConfig{
+		Name:   "virt",
+		OnExit: parallel.Fail,
+		TaskFn: func(ctx context.Context) error {
+			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+				for _, c := range []string{"virtqemud", "virtlogd", "virtstoraged", "virtnetworkd", "virtnodedevd"} {
+					spawn(c, parallel.Fail, func(ctx context.Context) error {
+						return libexec.Exec(ctx, exec.Command(filepath.Join("/usr/sbin", c)))
+					})
+				}
+
+				return nil
+			})
+		},
+	})
+}
+
+func pruneVirt() error {
+	configF, err := os.OpenFile("/etc/libvirt/qemu.conf", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer configF.Close()
+
+	if _, err := configF.WriteString("\nuser = \"root\"\ngroup = \"root\"\n"); err != nil {
+		return errors.WithStack(err)
+	}
+
+	return errors.WithStack(filepath.WalkDir("/etc/libvirt/qemu", func(path string, d os.DirEntry, err error) error {
+		if !d.IsDir() {
+			return os.Remove(path)
+		}
+		return nil
+	}))
 }

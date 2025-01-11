@@ -151,4 +151,4 @@ type Chains struct {
 }
 
 // RuleSource generates firewall rules.
-type RuleSource func(chains Chains) []*nftables.Rule
+type RuleSource func(chains Chains) ([]*nftables.Rule, error)

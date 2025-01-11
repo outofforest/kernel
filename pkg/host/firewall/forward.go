@@ -8,7 +8,7 @@ import (
 
 // ForwardTo accepts traffic forwarded to the interface.
 func ForwardTo(iface string) RuleSource {
-	return func(chains Chains) []*nftables.Rule {
+	return func(chains Chains) ([]*nftables.Rule, error) {
 		return []*nftables.Rule{
 			{
 				Chain: chains.V4FilterForward,
@@ -17,13 +17,13 @@ func ForwardTo(iface string) RuleSource {
 					rules.Accept(),
 				),
 			},
-		}
+		}, nil
 	}
 }
 
 // ForwardFrom accepts traffic forwarded from the interface.
 func ForwardFrom(iface string) RuleSource {
-	return func(chains Chains) []*nftables.Rule {
+	return func(chains Chains) ([]*nftables.Rule, error) {
 		return []*nftables.Rule{
 			{
 				Chain: chains.V4FilterForward,
@@ -32,6 +32,6 @@ func ForwardFrom(iface string) RuleSource {
 					rules.Accept(),
 				),
 			},
-		}
+		}, nil
 	}
 }

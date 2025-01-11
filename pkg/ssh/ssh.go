@@ -31,47 +31,48 @@ const (
 	shellPath = "/usr/bin/bash"
 )
 
-// NewService returns SSH service.
-func NewService(authorizedKeys ...string) host.Service {
-	return host.Service{
-		Name:   "ssh",
-		OnExit: parallel.Fail,
-		Firewall: []firewall.RuleSource{
-			firewall.OpenV4TCPPort(port),
-		},
-		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
-			if len(authorizedKeys) == 0 {
-				return errors.New("no authorized keys specified")
-			}
-
-			authKeys := make([][]byte, 0, len(authorizedKeys))
-			for _, k := range authorizedKeys {
-				key, err := base64.RawStdEncoding.DecodeString(k)
-				if err != nil {
-					return errors.Wrapf(err, "failed to base64 decode key %q", k)
+// Service returns SSH service.
+func Service(authorizedKeys ...string) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.AddFirewallRules(firewall.OpenV4TCPPort(port))
+		c.StartServices(host.ServiceConfig{
+			Name:   "ssh",
+			OnExit: parallel.Fail,
+			TaskFn: func(ctx context.Context) error {
+				if len(authorizedKeys) == 0 {
+					return errors.New("no authorized keys specified")
 				}
-				authKeys = append(authKeys, key)
-			}
 
-			_, privKey, err := ed25519.GenerateKey(nil)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-
-			signer, err := ssh.NewSignerFromKey(privKey)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-
-			for {
-				if err := runServer(ctx, signer, authKeys); err != nil {
-					if errors.Is(err, ctx.Err()) {
-						return err
+				authKeys := make([][]byte, 0, len(authorizedKeys))
+				for _, k := range authorizedKeys {
+					key, err := base64.RawStdEncoding.DecodeString(k)
+					if err != nil {
+						return errors.Wrapf(err, "failed to base64 decode key %q", k)
 					}
-					logger.Get(ctx).Error("SSH server failed", zap.Error(err))
+					authKeys = append(authKeys, key)
 				}
-			}
-		},
+
+				_, privKey, err := ed25519.GenerateKey(nil)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+
+				signer, err := ssh.NewSignerFromKey(privKey)
+				if err != nil {
+					return errors.WithStack(err)
+				}
+
+				for {
+					if err := runServer(ctx, signer, authKeys); err != nil {
+						if errors.Is(err, ctx.Err()) {
+							return err
+						}
+						logger.Get(ctx).Error("SSH server failed", zap.Error(err))
+					}
+				}
+			},
+		})
+		return nil
 	}
 }
 

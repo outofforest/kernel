@@ -34,40 +34,43 @@ var servers = []string{
 	"3.de.pool.ntp.org",
 }
 
-// NewService creates new NTP service.
-func NewService() host.Service {
-	return host.Service{
-		Name:   "ntp",
-		OnExit: parallel.Fail,
-		ServiceFn: func(ctx context.Context, _ *host.Configurator) error {
-			log := logger.Get(ctx)
-			rnd := rand.New(rand.NewSource(time.Now().Unix()))
-			for {
-				server := servers[rnd.Intn(len(servers))]
-				resp, err := ntp.Query(server)
-				if err != nil {
+// Service creates new NTP service.
+func Service() host.Configurator {
+	return func(c *host.Configuration) error {
+		c.StartServices(host.ServiceConfig{
+			Name:   "ntp",
+			OnExit: parallel.Fail,
+			TaskFn: func(ctx context.Context) error {
+				log := logger.Get(ctx)
+				rnd := rand.New(rand.NewSource(time.Now().Unix()))
+				for {
+					server := servers[rnd.Intn(len(servers))]
+					resp, err := ntp.Query(server)
+					if err != nil {
+						select {
+						case <-ctx.Done():
+							return errors.WithStack(ctx.Err())
+						case <-time.After(10 * time.Second):
+							log.Error("Getting time from NTP server failed.", zap.String("server", server),
+								zap.Error(err))
+							continue
+						}
+					}
+
+					if err := syscall.Settimeofday(&syscall.Timeval{
+						Sec: time.Now().Add(resp.ClockOffset).Unix(),
+					}); err != nil {
+						return errors.WithStack(err)
+					}
+
 					select {
 					case <-ctx.Done():
 						return errors.WithStack(ctx.Err())
-					case <-time.After(10 * time.Second):
-						log.Error("Getting time from NTP server failed.", zap.String("server", server),
-							zap.Error(err))
-						continue
+					case <-time.After(time.Hour):
 					}
 				}
-
-				if err := syscall.Settimeofday(&syscall.Timeval{
-					Sec: time.Now().Add(resp.ClockOffset).Unix(),
-				}); err != nil {
-					return errors.WithStack(err)
-				}
-
-				select {
-				case <-ctx.Done():
-					return errors.WithStack(ctx.Err())
-				case <-time.After(time.Hour):
-				}
-			}
-		},
+			},
+		})
+		return nil
 	}
 }
