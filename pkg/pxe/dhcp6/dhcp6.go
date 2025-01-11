@@ -3,11 +3,11 @@ package dhcp6
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"net"
 
-	"github.com/cespare/xxhash"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
@@ -124,8 +124,7 @@ func runServer(ctx context.Context) error {
 							},
 							{
 								OptionCode: optionIANA,
-								OptionData: fillIAADDROption(iaadrOption, iaIAID, clientDUID, serverDUID,
-									scopes[udpAddr.Zone]),
+								OptionData: fillIAADDROption(iaadrOption, iaIAID),
 							},
 						},
 					}, b), addr); err != nil {
@@ -185,8 +184,7 @@ func runServer(ctx context.Context) error {
 							},
 							{
 								OptionCode: optionIANA,
-								OptionData: fillIAADDROption(iaadrOption, iaIAID, clientDUID, serverDUID,
-									scopes[udpAddr.Zone]),
+								OptionData: fillIAADDROption(iaadrOption, iaIAID),
 							},
 						},
 					}, b), addr); err != nil {
@@ -279,8 +277,7 @@ func newListener() (*net.UDPConn, map[string]*net.IPNet, error) {
 		}
 		for _, addr := range addrs {
 			ipAddr, ok := addr.(*net.IPNet)
-			if !ok || ipAddr.IP.To4() != nil || ipAddr.IP.IsLoopback() || ipAddr.IP.IsLinkLocalUnicast() ||
-				ipAddr.IP.IsMulticast() {
+			if !ok || ipAddr.IP.To4() != nil || ipAddr.IP.IsLoopback() || !ipAddr.IP.IsLinkLocalUnicast() {
 				continue
 			}
 
@@ -319,25 +316,29 @@ func newIAADDROption() []byte {
 	return ianaData
 }
 
-func fillIAADDROption(iaadrOption, iaID, clientDUID, serverDUID []byte, baseIP *net.IPNet) []byte {
+func fillIAADDROption(iaadrOption, iaID []byte) []byte {
 	copy(iaadrOption, iaID)
-	copy(iaadrOption[16:], selectIP(iaID, clientDUID, serverDUID, baseIP))
+	copy(iaadrOption[16:], selectIP())
 	return iaadrOption
 }
 
-func selectIP(iaID, clientDUID, serverDUID []byte, baseIP *net.IPNet) net.IP {
-	// FIXME (wojciech): Don't assume /64 network.
+func selectIP() net.IP {
+	// It is assumed that the DHCP network is always fe80::/10 (local-link).
 
 	ip := make(net.IP, 16)
-	copy(ip, baseIP.IP[:8])
+	if _, err := rand.Read(ip); err != nil {
+		panic(err)
+	}
 
-	hasher := xxhash.New()
-	hasher.Sum(iaID)
-	hasher.Sum(clientDUID)
-	copy(ip[8:], hasher.Sum(serverDUID))
+	// Ensure fe80::/10.
+	// Bytes in net.IP are stored in reverted order.
+	ip[0] = 0xfe
+	ip[1] |= 0x80
+	ip[1] &= 0xbf
 
-	// To be sure it doesn't conflict with statically assigned IPs.
-	ip[8] |= 0x80
+	// It is assumed that DHCP servers have this bit set to 0.
+	// So we set it to 1 to ensure there are no conflicts.
+	ip[1] |= 0x20
 
 	return ip
 }

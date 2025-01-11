@@ -28,7 +28,7 @@ var deployment = Deployment(
 	),
 	Host("pxe",
 		Gateway("10.0.0.1"),
-		Network("00:01:0a:00:00:05", "10.0.0.100/24", "fe80::cba:4be3:12c0:7475/64", "fd27:cd4c:c349::1/64"),
+		Network("00:01:0a:00:00:05", "10.0.0.100/24", "fe80::1/10"),
 		pxe.Service("/dev/sda"),
 		yum.Service("/tmp/repo"),
 	),
