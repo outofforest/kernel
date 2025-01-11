@@ -432,7 +432,7 @@ func configureGateway(gateway net.IP) error {
 			return errors.WithStack(err)
 		}
 		for _, ip := range ips {
-			if ip.IP.Mask(ip.Mask).To4().Equal(gateway.Mask(ip.Mask).To4()) {
+			if ip.Contains(gateway) {
 				return errors.WithStack(netlink.RouteAdd(&netlink.Route{
 					Scope:     netlink.SCOPE_UNIVERSE,
 					LinkIndex: l.Attrs().Index,

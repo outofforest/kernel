@@ -6,7 +6,8 @@ import (
 	"github.com/outofforest/cloudless/pkg/ntp"
 	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/cloudless/pkg/ssh"
-	"github.com/outofforest/cloudless/pkg/virt"
+	"github.com/outofforest/cloudless/pkg/vm"
+	"github.com/outofforest/cloudless/pkg/vnet"
 	"github.com/outofforest/cloudless/pkg/yum"
 )
 
@@ -26,8 +27,11 @@ var deployment = Deployment(
 	Host("demo",
 		Gateway("10.0.0.1"),
 		Network("00:01:0a:00:00:9b", "10.0.0.155/24"),
-		virt.NATedNetwork(),
-		virt.VM(),
+		vnet.NAT("internal", "52:54:00:6d:94:c0",
+			vnet.IP4("10.0.1.1/24"),
+			vnet.IP6("fdff:8ffd:d676::1/64"),
+		),
+		vm.New(),
 	),
 	Host("vm",
 		Gateway("10.0.1.1"),

@@ -1,4 +1,4 @@
-package virt
+package vm
 
 import (
 	"context"
@@ -14,8 +14,8 @@ import (
 //go:embed vm.xml
 var vmDef []byte
 
-// VM creates VM.
-func VM() host.Configurator {
+// New creates VM.
+func New() host.Configurator {
 	return func(c *host.Configuration) error {
 		c.RequireInitramfs()
 		c.RequireVirt()
