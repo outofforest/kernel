@@ -1,27 +1,39 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"time"
+	. "github.com/outofforest/cloudless" //nolint:stylecheck
+	"github.com/outofforest/cloudless/pkg/acpi"
+	"github.com/outofforest/cloudless/pkg/ntp"
+	"github.com/outofforest/cloudless/pkg/pxe"
+	"github.com/outofforest/cloudless/pkg/ssh"
+	"github.com/outofforest/cloudless/pkg/virt"
+	"github.com/outofforest/cloudless/pkg/yum"
+)
 
-	"go.uber.org/zap"
-
-	"github.com/outofforest/cloudless/pkg/host"
-	"github.com/outofforest/logger"
-	"github.com/outofforest/run"
+var deployment = Deployment(
+	ImmediateKernelModules(DefaultKernelModules...),
+	DNS(DefaultDNS...),
+	acpi.PowerService(),
+	ntp.Service(),
+	ssh.Service("AAAAC3NzaC1lZDI1NTE5AAAAIEcJvvtOBgTsm3mq3Sg8cjn6Mz/vC9f3k6a89ZOjIyF6"),
+	Host("demo",
+		Gateway("10.0.0.1"),
+		Network("00:01:0a:00:00:9b", "10.0.0.155/24"),
+		virt.NATedNetwork(),
+		virt.VM(),
+	),
+	Host("vm",
+		Gateway("10.0.1.1"),
+		Network("00:01:0a:00:02:05", "10.0.1.2/24"),
+	),
+	Host("pxe",
+		Gateway("10.0.0.1"),
+		Network("00:01:0a:00:00:05", "10.0.0.100/24", "fe80::cba:4be3:12c0:7475/64", "fd27:cd4c:c349::1/64"),
+		pxe.Service("/dev/sda"),
+		yum.Service("/tmp/repo"),
+	),
 )
 
 func main() {
-	run.New().Run(context.Background(), "cloudless", func(ctx context.Context) error {
-		fmt.Println("I am cloudless init process.")
-
-		err := host.Run(ctx, cfg...)
-		if err != nil {
-			logger.Get(ctx).Error("Error", zap.Error(err))
-			time.Sleep(120 * time.Second)
-		}
-
-		return err
-	})
+	Main(deployment...)
 }
