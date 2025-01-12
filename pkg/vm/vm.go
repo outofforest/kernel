@@ -64,6 +64,7 @@ func New(name string, cores, memory uint64, configurators ...Configurator) host.
 			Name:   "kvm-intel",
 			Params: "nested=Y",
 		})
+		c.AddHugePages(memory)
 		c.Prepare(func(_ context.Context) error {
 			filePath := fmt.Sprintf("/etc/libvirt/qemu/%s.xml", name)
 			f, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
