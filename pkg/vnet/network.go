@@ -27,34 +27,29 @@ var (
 	natDefTmpl = lo.Must(template.New("nat").Parse(natDef))
 )
 
-// Network represents network configuration.
-type Network struct {
-	UUID      uuid.UUID
-	Name      string
-	IfaceName string
-	MAC       net.HardwareAddr
-	IP4       net.IPNet
-	IP6       net.IPNet
+// Config represents network configuration.
+type Config struct {
+	IP4 net.IPNet
+	IP6 net.IPNet
 }
 
 // Configurator defines function setting the network configuration.
-type Configurator func(m *Network)
+type Configurator func(n *Config)
 
 // NAT creates NATed network.
 func NAT(name, mac string, configurators ...Configurator) host.Configurator {
 	return func(c *host.Configuration) error {
+		var n Config
+
 		netUUID, err := uuid.NewUUID()
 		if err != nil {
 			return errors.WithStack(err)
 		}
-		n := Network{
-			UUID:      netUUID,
-			Name:      name,
-			IfaceName: "v" + strings.ToLower(name),
-			MAC:       parse.MAC(mac),
-		}
-		if len(n.IfaceName) > 15 {
-			n.IfaceName = n.IfaceName[:15]
+
+		hostMAC := parse.MAC(mac)
+		ifName := "v" + strings.ToLower(name)
+		if len(ifName) > 15 {
+			ifName = ifName[:15]
 		}
 
 		for _, configurator := range configurators {
@@ -62,9 +57,9 @@ func NAT(name, mac string, configurators ...Configurator) host.Configurator {
 		}
 
 		c.AddFirewallRules(
-			firewall.ForwardTo(n.IfaceName),
-			firewall.ForwardFrom(n.IfaceName),
-			firewall.Masquerade(n.IfaceName),
+			firewall.ForwardTo(ifName),
+			firewall.ForwardFrom(ifName),
+			firewall.Masquerade(ifName),
 		)
 		c.RequireIPForwarding()
 		c.RequireVirt()
@@ -72,7 +67,7 @@ func NAT(name, mac string, configurators ...Configurator) host.Configurator {
 			Name: "tun",
 		})
 		c.Prepare(func(_ context.Context) error {
-			filePath := fmt.Sprintf("/etc/libvirt/qemu/networks/%s.xml", n.Name)
+			filePath := fmt.Sprintf("/etc/libvirt/qemu/networks/%s.xml", name)
 			f, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 			if err != nil {
 				return errors.WithStack(err)
@@ -89,10 +84,10 @@ func NAT(name, mac string, configurators ...Configurator) host.Configurator {
 				IP6       net.IP
 				IP6Prefix int
 			}{
-				UUID:      n.UUID,
-				Name:      n.Name,
-				IfaceName: n.IfaceName,
-				MAC:       n.MAC,
+				UUID:      netUUID,
+				Name:      name,
+				IfaceName: ifName,
+				MAC:       hostMAC,
 				IP4:       n.IP4.IP,
 				IP6:       n.IP6.IP,
 			}
@@ -119,14 +114,14 @@ func NAT(name, mac string, configurators ...Configurator) host.Configurator {
 
 // IP4 configures network's IPv4 address on the host.
 func IP4(ip string) Configurator {
-	return func(n *Network) {
+	return func(n *Config) {
 		n.IP4 = parse.IPNet4(ip)
 	}
 }
 
 // IP6 configures network's IPv6 address on the host.
 func IP6(ip string) Configurator {
-	return func(n *Network) {
+	return func(n *Config) {
 		n.IP6 = parse.IPNet6(ip)
 	}
 }
