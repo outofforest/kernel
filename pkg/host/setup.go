@@ -237,6 +237,9 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrHostFound):
+			if hostFound {
+				return errors.New("host matches many configurations")
+			}
 			hostFound = true
 		default:
 			return err
