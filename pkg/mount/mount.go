@@ -35,6 +35,14 @@ func DevPtsFS(dir string) error {
 	return errors.WithStack(syscall.Mount("none", dir, "devpts", 0, ""))
 }
 
+// HugeTlbFs mounts hugetlbfs.
+func HugeTlbFs(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(syscall.Mount("none", dir, "hugetlbfs", 0, ""))
+}
+
 // SysFS mounts sysfs.
 func SysFS(dir string) error {
 	if err := os.MkdirAll(dir, 0o555); err != nil {
@@ -88,7 +96,10 @@ func Root() error {
 	if err := DevFS("/dev"); err != nil {
 		return err
 	}
-	return DevPtsFS("/dev/pts")
+	if err := DevPtsFS("/dev/pts"); err != nil {
+		return err
+	}
+	return HugeTlbFs("/dev/hugepages")
 }
 
 func untarInitramfs() error {

@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -123,6 +124,7 @@ func NewSubconfiguration(c *Configuration) (*Configuration, func()) {
 		c.AddRepoMirrors(c2.repoMirrors...)
 		c.AddNetworks(c2.networks...)
 		c.AddFirewallRules(c2.firewall...)
+		c.AddHugePages(c2.hugePages)
 		c.Prepare(c2.prepare...)
 		c.StartServices(c2.services...)
 	}
@@ -143,6 +145,7 @@ type Configuration struct {
 	repoMirrors         []string
 	networks            []NetworkConfig
 	firewall            []firewall.RuleSource
+	hugePages           uint64
 	prepare             []PrepareFn
 	services            []ServiceConfig
 }
@@ -207,6 +210,11 @@ func (c *Configuration) AddNetworks(networks ...NetworkConfig) {
 // AddFirewallRules add firewall rules.
 func (c *Configuration) AddFirewallRules(sources ...firewall.RuleSource) {
 	c.firewall = append(c.firewall, sources...)
+}
+
+// AddHugePages adds number of hugepages to be allocated.
+func (c *Configuration) AddHugePages(hugePages uint64) {
+	c.hugePages += hugePages
 }
 
 // Prepare adds prepare function to be called.
@@ -300,6 +308,12 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 		if err := configureIPForwarding(); err != nil {
 			return err
 		}
+	}
+	if err := configureLimits(); err != nil {
+		return err
+	}
+	if err := configureHugePages(cfg.hugePages); err != nil {
+		return err
 	}
 	if err := runPrepares(ctx, cfg.prepare); err != nil {
 		return err
@@ -665,13 +679,33 @@ func configureFirewall(sources []firewall.RuleSource) error {
 	return errors.WithStack(conn.Flush())
 }
 
+func configureLimits() error {
+	limitsF, err := os.OpenFile("/etc/security/limits.conf", os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	defer limitsF.Close()
+
+	_, err = limitsF.WriteString("\n* soft memlock unlimited\n* hard memlock unlimited\n")
+	return errors.WithStack(err)
+}
+
+func configureHugePages(hugePages uint64) error {
+	if hugePages == 0 {
+		return nil
+	}
+
+	return errors.WithStack(os.WriteFile("/proc/sys/vm/nr_hugepages",
+		[]byte(strconv.FormatUint(hugePages, 10)), 0o644))
+}
+
 func setupVirt(c *Configuration) {
 	c.RequirePackages(virtPackages...)
 	c.StartServices(ServiceConfig{
 		Name:   "virt",
 		OnExit: parallel.Fail,
 		TaskFn: func(ctx context.Context) error {
-			configF, err := os.OpenFile("/etc/libvirt/qemu.conf", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+			configF, err := os.OpenFile("/etc/libvirt/qemu.conf", os.O_WRONLY|os.O_APPEND, 0o644)
 			if err != nil {
 				return errors.WithStack(err)
 			}
