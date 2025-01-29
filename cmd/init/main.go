@@ -25,6 +25,8 @@ var deployment = Deployment(
 		pxe.Service("/dev/sda"),
 		yum.Service("/tmp/repo"),
 		dns.Service(
+			dns.ForwardTo("1.1.1.1", "8.8.8.8"),
+			dns.ForwardFor("10.0.0.0/24"),
 			dns.Zone("exw.co", "ns1.exw.co", "wojtek@exw.co", 1,
 				dns.Nameservers("ns1.exw.co", "ns2.exw.co"),
 				dns.Domain("ns1.exw.co", "127.0.0.1"),

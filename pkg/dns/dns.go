@@ -12,16 +12,18 @@ import (
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/logger"
+	"github.com/outofforest/mass"
 	"github.com/outofforest/parallel"
 )
 
 const (
-	port         = 53
-	bufferSize   = 4096
-	maxMsgLength = 512
-	headerSize   = 12
-	ttl          = 60
-	maxAnswers   = 10
+	port              = 53
+	bufferSize        = 1500
+	maxMsgLength      = 512
+	headerSize        = 12
+	ttl               = 60
+	maxAnswers        = 10
+	forwardChCapacity = 10
 
 	classInternet = 1
 
@@ -55,21 +57,45 @@ func Service(configurators ...Configurator) host.Configurator {
 			Name:   "dns",
 			OnExit: parallel.Fail,
 			TaskFn: func(ctx context.Context) error {
-				for {
-					if err := runServer(ctx, config); err != nil {
-						if errors.Is(err, ctx.Err()) {
-							return err
-						}
-						logger.Get(ctx).Error("DNS server failed", zap.Error(err))
-					}
-				}
+				return run(ctx, config)
 			},
 		})
 		return nil
 	}
 }
 
-func runServer(ctx context.Context, config Config) error {
+func run(ctx context.Context, config Config) error {
+	return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+		var forwardCh chan forwardRequest
+
+		if len(config.ForwardFor) > 0 && len(config.ForwardTo) > 0 {
+			forwardCh = make(chan forwardRequest, forwardChCapacity)
+
+			spawn("forwarder", parallel.Fail, func(ctx context.Context) error {
+				return runForwarders(ctx, config.ForwardTo, forwardCh)
+			})
+		}
+		spawn("resolver", parallel.Fail, func(ctx context.Context) error {
+			if forwardCh != nil {
+				defer close(forwardCh)
+			}
+
+			for {
+				if err := runResolver(ctx, config, forwardCh); err != nil {
+					if errors.Is(err, ctx.Err()) {
+						return err
+					}
+					logger.Get(ctx).Error("DNS server failed", zap.Error(err))
+				}
+			}
+		})
+
+		return nil
+	})
+}
+
+//nolint:gocyclo
+func runResolver(ctx context.Context, config Config, forwardCh chan<- forwardRequest) error {
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{
 		IP:   net.IPv4zero,
 		Port: port,
@@ -85,13 +111,13 @@ func runServer(ctx context.Context, config Config) error {
 			return errors.WithStack(ctx.Err())
 		})
 		spawn("server", parallel.Fail, func(ctx context.Context) error {
-			rB := make([]byte, bufferSize)
-			sB := make([]byte, bufferSize)
+			buff := make([]byte, bufferSize)
+			massBuff := mass.New[byte](100 * bufferSize)
 
 			var queryID uint64
 
 			for {
-				n, addr, err := conn.ReadFrom(rB)
+				n, addr, err := conn.ReadFrom(buff)
 				if err != nil {
 					if ctx.Err() != nil {
 						return errors.WithStack(ctx.Err())
@@ -99,18 +125,17 @@ func runServer(ctx context.Context, config Config) error {
 					return errors.WithStack(err)
 				}
 
-				rb := rB[:n]
-				h, rb, ok := readHeader(rb)
+				h, ok := readHeader(buff[:n])
 				if !ok || h.QR || h.TC || h.QDCount == 0 || h.RCode != 0x00 || h.ANCount != 0 || h.NSCount != 0 {
 					h.RCode = rCodeFormatError
-					if err := sendError(h, addr, conn, sB); err != nil {
+					if err := sendError(h, addr, conn, buff); err != nil {
 						return err
 					}
 					continue
 				}
 				if h.Opcode != 0x00 || h.QDCount > 1 {
 					h.RCode = rCodeNotImplemented
-					if err := sendError(h, addr, conn, sB); err != nil {
+					if err := sendError(h, addr, conn, buff); err != nil {
 						return err
 					}
 					continue
@@ -118,26 +143,77 @@ func runServer(ctx context.Context, config Config) error {
 
 				h.QR = true
 				h.AA = true
-				h.RA = false
+				h.RA = h.RD && forwardCh != nil && forwardingAllowed(addr, config.ForwardFor)
 				h.QDCount = 0
 				h.ANCount = 0
 				h.NSCount = 0
 				h.ARCount = 0
 
-				q, ok := readQuery(rb)
+				q, ok := readQuery(buff[headerSize:n])
+				if !ok || q.QName == "" {
+					h.RCode = rCodeFormatError
+					if err := sendError(h, addr, conn, buff); err != nil {
+						return err
+					}
+					continue
+				}
+				if q.QClass != classInternet {
+					h.RCode = rCodeNotImplemented
+					if err := sendError(h, addr, conn, buff); err != nil {
+						return err
+					}
+					continue
+				}
+
+				zConfig, ok := zone(q.QName, config.Zones)
+				//nolint:nestif
 				if !ok {
+					if h.RA {
+						fBuff := massBuff.NewSlice(uint64(n))
+						copy(fBuff, buff)
+						doneCh := make(chan struct{}, 1)
+						doneCh <- struct{}{}
+
+						var successCount uint64
+						for fi := range uint64(len(config.ForwardTo)) {
+							select {
+							case forwardCh <- forwardRequest{
+								ForwardIPIndex: fi,
+								Query:          fBuff,
+								Conn:           conn,
+								Address:        addr,
+								DoneCh:         doneCh,
+							}:
+								successCount++
+							default:
+							}
+						}
+						if successCount == 0 {
+							h.RCode = rCodeServerFailure
+							if err := sendError(h, addr, conn, buff); err != nil {
+								return err
+							}
+						}
+						continue
+					}
+
+					h.RCode = rCodeRefused
+					if err := sendError(h, addr, conn, buff); err != nil {
+						return err
+					}
+
 					continue
 				}
 
 				queryID++
-				sb := resolve(q, config.Zones, sB[headerSize:headerSize], queryID, &h)
+				sb := resolve(q, zConfig, buff[headerSize:headerSize], queryID, &h)
 
-				putHeader(h, sB[:0])
+				putHeader(h, buff[:0])
 
 				if h.RCode != rCodeOK {
 					sb = nil
 				}
-				if _, err := conn.WriteTo(sB[:headerSize+len(sb)], addr); err != nil {
+				if _, err := conn.WriteTo(buff[:headerSize+len(sb)], addr); err != nil {
 					return err
 				}
 			}
@@ -145,6 +221,16 @@ func runServer(ctx context.Context, config Config) error {
 
 		return nil
 	})
+}
+
+func forwardingAllowed(addr net.Addr, forwardFor []net.IPNet) bool {
+	udpAddr := addr.(*net.UDPAddr)
+	for _, n := range forwardFor {
+		if n.Contains(udpAddr.IP) {
+			return true
+		}
+	}
+	return false
 }
 
 func sendError(h header, addr net.Addr, conn *net.UDPConn, b []byte) error {
@@ -162,23 +248,7 @@ func sendError(h header, addr net.Addr, conn *net.UDPConn, b []byte) error {
 	return errors.WithStack(err)
 }
 
-//nolint:gocyclo
-func resolve(q query, zones map[string]ZoneConfig, b []byte, queryID uint64, h *header) []byte {
-	if q.QName == "" {
-		h.RCode = rCodeFormatError
-		return b
-	}
-	if q.QClass != classInternet {
-		h.RCode = rCodeNotImplemented
-		return b
-	}
-
-	zConfig, ok := zone(q.QName, zones)
-	if !ok {
-		h.RCode = rCodeRefused
-		return b
-	}
-
+func resolve(q query, zConfig ZoneConfig, b []byte, queryID uint64, h *header) []byte {
 	switch q.QType {
 	case typeSOA:
 		if q.QName != zConfig.Domain {
@@ -354,17 +424,17 @@ func zone(qName string, zones map[string]ZoneConfig) (ZoneConfig, bool) {
 	}
 }
 
-func readHeader(b []byte) (header, []byte, bool) {
+func readHeader(b []byte) (header, bool) {
 	var h header
 
 	if len(b) < 2 {
-		return h, nil, false
+		return h, false
 	}
 
 	h.ID = binary.BigEndian.Uint16(b)
 
 	if len(b) < headerSize {
-		return h, nil, false
+		return h, false
 	}
 
 	h.QR = b[2]&0x80 != 0x00
@@ -376,7 +446,7 @@ func readHeader(b []byte) (header, []byte, bool) {
 	h.RCode = b[3] & 0x0f
 	h.QDCount = binary.BigEndian.Uint16(b[4:])
 
-	return h, b[12:], true
+	return h, true
 }
 
 func readQuery(b []byte) (query, bool) {
