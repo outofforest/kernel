@@ -377,7 +377,6 @@ func configureNetworks(networks []NetworkConfig) error {
 				if err := configureNetwork(n, l); err != nil {
 					return err
 				}
-				fmt.Println("network configured")
 				found = true
 				break
 			}
@@ -436,8 +435,6 @@ func configureGateway(gateway net.IP) error {
 	if gateway == nil {
 		return nil
 	}
-
-	fmt.Println("gateway configured")
 
 	links, err := netlink.LinkList()
 	if err != nil {

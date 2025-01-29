@@ -3,6 +3,7 @@ package main
 import (
 	. "github.com/outofforest/cloudless" //nolint:stylecheck
 	"github.com/outofforest/cloudless/pkg/acpi"
+	"github.com/outofforest/cloudless/pkg/dns"
 	"github.com/outofforest/cloudless/pkg/ntp"
 	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/cloudless/pkg/ssh"
@@ -23,6 +24,21 @@ var deployment = Deployment(
 		Network("00:01:0a:00:00:05", "10.0.0.100/24", "fe80::1/10"),
 		pxe.Service("/dev/sda"),
 		yum.Service("/tmp/repo"),
+		dns.Service(
+			dns.Zone("exw.co", "ns1.exw.co", "wojtek@exw.co", 1,
+				dns.Nameservers("ns1.exw.co", "ns2.exw.co"),
+				dns.Domain("ns1.exw.co", "127.0.0.1"),
+				dns.Domain("ns2.exw.co", "127.0.0.2"),
+				dns.Domain("exw.co", "127.0.0.3"),
+				dns.Domain("test.exw.co", "127.0.0.5", "127.0.0.6", "127.0.0.7"),
+				dns.Domain("mail.exw.co", "127.0.0.8"),
+				dns.Alias("alias.exw.co", "exw.co"),
+				dns.Alias("lala.alias.exw.co", "alias.exw.co"),
+				dns.Text("exw.co", "text1", "text2"),
+				dns.MailExchange("mail.exw.co", 10),
+				dns.MailExchange("mail2.exw.co", 20),
+			),
+		),
 	),
 	Host("demo",
 		Gateway("10.0.0.1"),
