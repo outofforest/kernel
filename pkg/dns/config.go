@@ -8,7 +8,9 @@ import (
 
 // Config stores dns configuration.
 type Config struct {
-	Zones map[string]ZoneConfig
+	Zones      map[string]ZoneConfig
+	ForwardTo  []net.IP
+	ForwardFor []net.IPNet
 }
 
 // ZoneConfig stores dns zone configuration.
@@ -113,5 +115,27 @@ func MailExchange(domain string, priority uint16) ZoneConfigurator {
 func Text(domain string, values ...string) ZoneConfigurator {
 	return func(c *ZoneConfig) {
 		c.Texts[domain] = append(c.Texts[domain], values...)
+	}
+}
+
+// ForwardTo sets DNS servers for forwarding.
+func ForwardTo(servers ...string) Configurator {
+	parsedIPs := make([]net.IP, 0, len(servers))
+	for _, ip := range servers {
+		parsedIPs = append(parsedIPs, parse.IP4(ip))
+	}
+	return func(c *Config) {
+		c.ForwardTo = append(c.ForwardTo, parsedIPs...)
+	}
+}
+
+// ForwardFor sets networks allowed to make forwarded DNS requests.
+func ForwardFor(networks ...string) Configurator {
+	parsedNetworks := make([]net.IPNet, 0, len(networks))
+	for _, n := range networks {
+		parsedNetworks = append(parsedNetworks, parse.IPNet4(n))
+	}
+	return func(c *Config) {
+		c.ForwardFor = append(c.ForwardFor, parsedNetworks...)
 	}
 }
