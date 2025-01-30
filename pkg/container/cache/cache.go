@@ -47,17 +47,18 @@ var (
 )
 
 // Service returns new yum repo service.
-func Service(repoRoot string, images ...string) host.Configurator {
+func Service(repoRoot string) host.Configurator {
 	return func(c *host.Configuration) error {
-		if len(images) == 0 {
-			return nil
-		}
-
 		c.AddFirewallRules(firewall.OpenV4TCPPort(port))
 		c.StartServices(host.ServiceConfig{
 			Name:   "containercache",
 			OnExit: parallel.Continue,
 			TaskFn: func(ctx context.Context) error {
+				images := c.ContainerImages()
+				if len(images) == 0 {
+					return nil
+				}
+
 				return run(ctx, repoRoot, images)
 			},
 		})
@@ -81,11 +82,10 @@ func run(ctx context.Context, repoRoot string, images []string) error {
 			return errors.Errorf("unsupported config media type %s for config", m.Config.MediaType)
 		}
 
-		tagPos := strings.Index(imageTag, "@")
-		if tagPos < 0 {
-			return errors.Errorf("no tag in image %q", imageTag)
+		image, _, err := splitImageTag(imageTag)
+		if err != nil {
+			return err
 		}
-		image := imageTag[:tagPos]
 
 		authToken, err = fetchBlob(ctx, repoRoot, repoURL, authToken, image, m.Config.Digest)
 		if err != nil {
@@ -116,27 +116,25 @@ func run(ctx context.Context, repoRoot string, images []string) error {
 	return server.Run(ctx)
 }
 
-func fetchManifest(ctx context.Context, repoRoot, repoURL, imageTag string) (manifest, string, error) {
-	tagPos := strings.Index(imageTag, "@")
-	if tagPos < 0 {
-		return manifest{}, "", errors.Errorf("invalid imageTag name %q", imageTag)
+func fetchManifest(ctx context.Context, repoRoot, repoURL, imageTag string) (Manifest, string, error) {
+	image, tag, err := splitImageTag(imageTag)
+	if err != nil {
+		return Manifest{}, "", err
 	}
-	image := imageTag[:tagPos]
-	tag := imageTag[tagPos+1:]
 
-	manifestURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s", repoURL, image, tag)
+	manifestURL := buildManifestURL(repoURL, image, tag)
 	manifestFile := filepath.Join(repoRoot, sanitizeURL(manifestURL))
 	manifestTmpFile := manifestFile + ".tmp"
 
 	logger.Get(ctx).Info("Fetching manifest", zap.String("url", manifestURL))
 
 	if err := os.MkdirAll(filepath.Dir(manifestFile), 0o700); err != nil {
-		return manifest{}, "", errors.WithStack(err)
+		return Manifest{}, "", errors.WithStack(err)
 	}
 
 	f, err := os.OpenFile(manifestTmpFile, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
 	if err != nil {
-		return manifest{}, "", errors.WithStack(err)
+		return Manifest{}, "", errors.WithStack(err)
 	}
 	defer f.Close()
 
@@ -203,27 +201,27 @@ func fetchManifest(ctx context.Context, repoRoot, repoURL, imageTag string) (man
 	})
 
 	if err != nil {
-		return manifest{}, "", err
+		return Manifest{}, "", err
 	}
 
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return manifest{}, "", errors.WithStack(err)
+		return Manifest{}, "", errors.WithStack(err)
 	}
 
-	var m manifest
+	var m Manifest
 	if err := json.NewDecoder(f).Decode(&m); err != nil {
-		return manifest{}, "", errors.WithStack(err)
+		return Manifest{}, "", errors.WithStack(err)
 	}
 
 	if err := os.Rename(manifestTmpFile, manifestFile); err != nil {
-		return manifest{}, "", errors.WithStack(err)
+		return Manifest{}, "", errors.WithStack(err)
 	}
 
 	return m, authToken, nil
 }
 
 func fetchBlob(ctx context.Context, repoRoot, repoURL, authToken, image, digest string) (string, error) {
-	blobURL := fmt.Sprintf("https://%s/v2/%s/blobs/%s", repoURL, image, digest)
+	blobURL := buildBlobURL(repoURL, image, digest)
 	blobFile := filepath.Join(repoRoot, sanitizeURL(blobURL))
 	blobTmpFile := blobFile + ".tmp"
 
@@ -404,14 +402,18 @@ func sanitizeURL(url string) string {
 	return url
 }
 
-type manifest struct {
-	MediaType string `json:"mediaType"`
-	Config    struct {
-		MediaType string `json:"mediaType"`
-		Digest    string `json:"digest"`
-	} `json:"config"`
-	Layers []struct {
-		MediaType string `json:"mediaType"`
-		Digest    string `json:"digest"`
-	} `json:"layers"`
+func splitImageTag(imageTag string) (string, string, error) {
+	tagPos := strings.Index(imageTag, "@")
+	if tagPos < 0 {
+		return "", "", errors.Errorf("invalid imageTag name %q", imageTag)
+	}
+	return imageTag[:tagPos], imageTag[tagPos+1:], nil
+}
+
+func buildManifestURL(repoURL, image, tag string) string {
+	return fmt.Sprintf("https://%s/v2/%s/manifests/%s", repoURL, image, tag)
+}
+
+func buildBlobURL(repoURL, image, digest string) string {
+	return fmt.Sprintf("https://%s/v2/%s/blobs/%s", repoURL, image, digest)
 }

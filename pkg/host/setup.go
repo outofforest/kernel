@@ -96,13 +96,41 @@ func (pr *packageRepo) Register(packages []string) {
 	}
 }
 
+func newContainerImagesRepo() *containerImagesRepo {
+	return &containerImagesRepo{
+		images: map[string]struct{}{},
+	}
+}
+
+type containerImagesRepo struct {
+	images map[string]struct{}
+}
+
+func (cir *containerImagesRepo) ContainerImages() []string {
+	images := make([]string, 0, len(cir.images))
+	for pkg := range cir.images {
+		images = append(images, pkg)
+	}
+
+	sort.Strings(images)
+	return images
+}
+
+func (cir *containerImagesRepo) Register(images []string) {
+	for _, image := range images {
+		cir.images[image] = struct{}{}
+	}
+}
+
 // PrepareFn is the function type used to register functions preparing host.
 type PrepareFn func(ctx context.Context) error
 
 // NewSubconfiguration creates subconfiguration.
 func NewSubconfiguration(c *Configuration) (*Configuration, func()) {
 	c2 := &Configuration{
-		pkgRepo: c.pkgRepo,
+		topConfig:           c,
+		pkgRepo:             c.pkgRepo,
+		containerImagesRepo: c.containerImagesRepo,
 	}
 	return c2, func() {
 		if c2.requireIPForwarding {
@@ -121,7 +149,8 @@ func NewSubconfiguration(c *Configuration) (*Configuration, func()) {
 			c.SetGateway(c2.gateway)
 		}
 		c.AddDNSes(c2.dnses...)
-		c.AddRepoMirrors(c2.repoMirrors...)
+		c.AddYumMirrors(c2.yumMirrors...)
+		c.AddContainerMirrors(c2.containerMirrors...)
 		c.AddNetworks(c2.networks...)
 		c.AddFirewallRules(c2.firewall...)
 		c.AddHugePages(c2.hugePages)
@@ -132,7 +161,9 @@ func NewSubconfiguration(c *Configuration) (*Configuration, func()) {
 
 // Configuration allows service to configure the required host settings.
 type Configuration struct {
-	pkgRepo *packageRepo
+	topConfig           *Configuration
+	pkgRepo             *packageRepo
+	containerImagesRepo *containerImagesRepo
 
 	requireIPForwarding bool
 	requireInitramfs    bool
@@ -142,7 +173,8 @@ type Configuration struct {
 	hostname            string
 	gateway             net.IP
 	dnses               []net.IP
-	repoMirrors         []string
+	yumMirrors          []string
+	containerMirrors    []string
 	networks            []NetworkConfig
 	firewall            []firewall.RuleSource
 	hugePages           uint64
@@ -182,6 +214,16 @@ func (c *Configuration) RequirePackages(packages ...string) {
 	c.packages = append(c.packages, packages...)
 }
 
+// ContainerImages returns the list of container images required by any host.
+func (c *Configuration) ContainerImages() []string {
+	return c.containerImagesRepo.ContainerImages()
+}
+
+// RequireContainers is called to download container images.
+func (c *Configuration) RequireContainers(images ...string) {
+	c.containerImagesRepo.Register(images)
+}
+
 // SetHostname sets hostname.
 func (c *Configuration) SetHostname(hostname string) {
 	c.hostname = hostname
@@ -197,9 +239,19 @@ func (c *Configuration) AddDNSes(dnses ...net.IP) {
 	c.dnses = append(c.dnses, dnses...)
 }
 
-// AddRepoMirrors adds package repository mirrors.
-func (c *Configuration) AddRepoMirrors(mirrors ...string) {
-	c.repoMirrors = append(c.repoMirrors, mirrors...)
+// AddYumMirrors adds package repository mirrors.
+func (c *Configuration) AddYumMirrors(mirrors ...string) {
+	c.yumMirrors = append(c.yumMirrors, mirrors...)
+}
+
+// ContainerMirrors returns list of container image mirrors.
+func (c *Configuration) ContainerMirrors() []string {
+	return c.topConfig.containerMirrors
+}
+
+// AddContainerMirrors adds container image mirrors.
+func (c *Configuration) AddContainerMirrors(mirrors ...string) {
+	c.containerMirrors = append(c.containerMirrors, mirrors...)
 }
 
 // AddNetworks configures networks.
@@ -237,8 +289,11 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 	}
 
 	cfg := &Configuration{
-		pkgRepo: newPackageRepo(),
+		pkgRepo:             newPackageRepo(),
+		containerImagesRepo: newContainerImagesRepo(),
 	}
+	cfg.topConfig = cfg
+
 	var hostFound bool
 	for _, c := range configurators {
 		err := c(cfg)
@@ -296,7 +351,7 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 	if err := configureFirewall(cfg.firewall); err != nil {
 		return err
 	}
-	if err := installPackages(ctx, cfg.repoMirrors, cfg.packages); err != nil {
+	if err := installPackages(ctx, cfg.yumMirrors, cfg.packages); err != nil {
 		return err
 	}
 	if cfg.requireVirt {

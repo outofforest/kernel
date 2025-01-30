@@ -36,10 +36,10 @@ type NetworkConfig struct {
 	MAC  net.HardwareAddr
 }
 
-// Configurator defines function setting the network configuration.
+// Configurator defines function setting the vm configuration.
 type Configurator func(vm *Config)
 
-// New creates Config.
+// New creates vm.
 func New(name string, cores, memory uint64, configurators ...Configurator) host.Configurator {
 	return func(c *host.Configuration) error {
 		var vm Config
