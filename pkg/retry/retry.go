@@ -79,7 +79,8 @@ var Immediately = FixedConfig{}
 
 // RetriableError means the operation that caused the error should be retried.
 type RetriableError struct {
-	err error
+	immediate bool
+	err       error
 }
 
 func (r RetriableError) Error() string {
@@ -91,13 +92,22 @@ func (r RetriableError) Unwrap() error {
 	return r.err
 }
 
-// Retriable wraps an error to tell Do that it should keep trying.
+// Retriable wraps an error to tell Do that it should keep trying with delay.
 // Returns nil if err is nil.
 func Retriable(err error) error {
 	if err == nil {
 		return nil
 	}
 	return RetriableError{err: err}
+}
+
+// ImmediatelyRetriable wraps an error to tell Do that it should keep trying immediately.
+// Returns nil if err is nil.
+func ImmediatelyRetriable(err error) error {
+	if err == nil {
+		return nil
+	}
+	return RetriableError{immediate: true, err: err}
 }
 
 // Do executes the given function, retrying if necessary.
@@ -125,8 +135,10 @@ func Do(ctx context.Context, c Config, f func() error) error {
 			return r.err
 		}
 
-		if err := Sleep(ctx, delay); err != nil {
-			return err
+		if !r.immediate {
+			if err := Sleep(ctx, delay); err != nil {
+				return err
+			}
 		}
 
 		if err := f(); !errors.As(err, &r) {
