@@ -133,10 +133,18 @@ func DNS(dns ...string) host.Configurator {
 	}
 }
 
-// RepoMirrors defines package repository mirrors.
-func RepoMirrors(mirrors ...string) host.Configurator {
+// YumMirrors defines package repository mirrors.
+func YumMirrors(mirrors ...string) host.Configurator {
 	return func(c *host.Configuration) error {
-		c.AddRepoMirrors(mirrors...)
+		c.AddYumMirrors(mirrors...)
+		return nil
+	}
+}
+
+// ContainerMirrors defines container image mirrors.
+func ContainerMirrors(mirrors ...string) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.AddContainerMirrors(mirrors...)
 		return nil
 	}
 }
