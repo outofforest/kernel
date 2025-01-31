@@ -32,6 +32,9 @@ import (
 	"github.com/outofforest/parallel"
 )
 
+// ContainerEnvVar is used to set container name.
+const ContainerEnvVar = "CLOUDLESS_CONTAINER"
+
 var (
 	// ErrPowerOff means that host should be powered off.
 	ErrPowerOff = errors.New("power off requested")
@@ -161,6 +164,7 @@ func NewSubconfiguration(c *Configuration) (*Configuration, func()) {
 
 // Configuration allows service to configure the required host settings.
 type Configuration struct {
+	isContainer         bool
 	topConfig           *Configuration
 	pkgRepo             *packageRepo
 	containerImagesRepo *containerImagesRepo
@@ -180,6 +184,11 @@ type Configuration struct {
 	hugePages           uint64
 	prepare             []PrepareFn
 	services            []ServiceConfig
+}
+
+// IsContainer informs if configurator is executed in the context of container.
+func (c *Configuration) IsContainer() bool {
+	return c.topConfig.isContainer
 }
 
 // RequireIPForwarding is called if host requires IP forwarding to be enabled.
@@ -283,16 +292,35 @@ func (c *Configuration) StartServices(services ...ServiceConfig) {
 type Configurator func(c *Configuration) error
 
 // Run runs host.
+//
+//nolint:gocyclo
 func Run(ctx context.Context, configurators ...Configurator) error {
-	if err := mount.Root(); err != nil {
-		return err
-	}
-
 	cfg := &Configuration{
+		isContainer:         isContainer(),
 		pkgRepo:             newPackageRepo(),
 		containerImagesRepo: newContainerImagesRepo(),
 	}
 	cfg.topConfig = cfg
+
+	if cfg.isContainer {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGUSR1)
+		defer signal.Stop(sig)
+
+		select {
+		case <-sig:
+		case <-ctx.Done():
+			return errors.WithStack(ctx.Err())
+		}
+
+		if err := mount.ContainerRoot(); err != nil {
+			return err
+		}
+	} else {
+		if err := mount.HostRoot(); err != nil {
+			return err
+		}
+	}
 
 	var hostFound bool
 	for _, c := range configurators {
@@ -315,21 +343,25 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 
 	ctx = logger.With(ctx, zap.String("host", cfg.hostname))
 
-	if cfg.requireVirt {
-		setupVirt(cfg)
-	}
+	//nolint:nestif
+	if !cfg.isContainer {
+		if cfg.requireVirt {
+			setupVirt(cfg)
+		}
 
-	if cfg.requireInitramfs {
-		if err := buildInitramfs(); err != nil {
+		if cfg.requireInitramfs {
+			if err := buildInitramfs(); err != nil {
+				return err
+			}
+		}
+		if err := removeOldRoot(); err != nil {
+			return err
+		}
+		if err := ConfigureKernelModules(cfg.kernelModules); err != nil {
 			return err
 		}
 	}
-	if err := removeOldRoot(); err != nil {
-		return err
-	}
-	if err := ConfigureKernelModules(cfg.kernelModules); err != nil {
-		return err
-	}
+
 	if err := configureDNS(cfg.dnses); err != nil {
 		return err
 	}
@@ -351,29 +383,33 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 	if err := configureFirewall(cfg.firewall); err != nil {
 		return err
 	}
-	if err := installPackages(ctx, cfg.yumMirrors, cfg.packages); err != nil {
-		return err
-	}
-	if cfg.requireVirt {
-		if err := pruneVirt(); err != nil {
+
+	//nolint:nestif
+	if !cfg.isContainer {
+		if err := installPackages(ctx, cfg.yumMirrors, cfg.packages); err != nil {
+			return err
+		}
+		if cfg.requireVirt {
+			if err := pruneVirt(); err != nil {
+				return err
+			}
+		}
+		if err := configureLimits(); err != nil {
+			return err
+		}
+		if err := configureHugePages(cfg.hugePages); err != nil {
 			return err
 		}
 	}
+
 	if cfg.requireIPForwarding {
 		if err := configureIPForwarding(); err != nil {
 			return err
 		}
 	}
-	if err := configureLimits(); err != nil {
-		return err
-	}
-	if err := configureHugePages(cfg.hugePages); err != nil {
-		return err
-	}
 	if err := runPrepares(ctx, cfg.prepare); err != nil {
 		return err
 	}
-
 	err := runServices(ctx, cfg.services)
 	switch {
 	case errors.Is(err, ErrPowerOff):
@@ -400,6 +436,10 @@ func configureHostname(hostname string) error {
 }
 
 func configureDNS(dns []net.IP) error {
+	if err := os.MkdirAll("/etc", 0o755); err != nil {
+		return errors.WithStack(err)
+	}
+
 	f, err := os.OpenFile("/etc/resolv.conf", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return errors.WithStack(err)
@@ -732,6 +772,10 @@ func configureFirewall(sources []firewall.RuleSource) error {
 }
 
 func configureLimits() error {
+	if err := os.MkdirAll("/etc/security", 0o755); err != nil {
+		return errors.WithStack(err)
+	}
+
 	limitsF, err := os.OpenFile("/etc/security/limits.conf", os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return errors.WithStack(err)
@@ -787,4 +831,8 @@ func pruneVirt() error {
 		}
 		return nil
 	}))
+}
+
+func isContainer() bool {
+	return os.Getenv(ContainerEnvVar) != ""
 }

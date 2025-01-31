@@ -59,9 +59,8 @@ func TmpFS(dir string) error {
 	return errors.WithStack(syscall.Mount("none", dir, "tmpfs", 0, ""))
 }
 
-// Root mounts root filesystem.
-// FIXME (wojciech): Remove init and initramfs.tar files.
-func Root() error {
+// HostRoot mounts host root filesystem.
+func HostRoot() error {
 	if err := TmpFS("/newroot"); err != nil {
 		return err
 	}
@@ -77,7 +76,7 @@ func Root() error {
 	if err := os.MkdirAll("/newroot/oldroot", 0o700); err != nil {
 		return errors.WithStack(err)
 	}
-	if err := syscall.Mount("/", "/newroot/oldroot", "", syscall.MS_BIND, ""); err != nil {
+	if err := syscall.Mount("/", "/newroot/oldroot", "", syscall.MS_BIND|syscall.MS_SLAVE, ""); err != nil {
 		return errors.WithStack(err)
 	}
 	if err := syscall.Mount("/newroot", "/", "", syscall.MS_MOVE, ""); err != nil {
@@ -100,6 +99,21 @@ func Root() error {
 		return err
 	}
 	return HugeTlbFs("/dev/hugepages")
+}
+
+// ContainerRoot mounts container root filesystem.
+func ContainerRoot() error {
+	if err := prepareRoot(); err != nil {
+		return err
+	}
+
+	if err := ProcFS("root/proc"); err != nil {
+		return err
+	}
+	if err := populateDev(); err != nil {
+		return err
+	}
+	return pivotRoot()
 }
 
 func untarInitramfs() error {
@@ -187,4 +201,75 @@ func untar(reader io.Reader) error {
 
 func ensureDir(file string) error {
 	return errors.WithStack(os.MkdirAll(filepath.Dir(file), 0o700))
+}
+
+func prepareRoot() error {
+	// systemd remounts everything as MS_SHARED, to prevent mess let's remount everything back to
+	// MS_PRIVATE inside namespace
+	if err := syscall.Mount("", "/", "", syscall.MS_SLAVE|syscall.MS_REC, ""); err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := os.MkdirAll("root/.old", 0o700); err != nil {
+		return errors.WithStack(err)
+	}
+
+	// PivotRoot requires new root to be on different mountpoint, so let's bind it to itself
+	if err := syscall.Mount(".", ".", "", syscall.MS_BIND|syscall.MS_PRIVATE, ""); err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(syscall.Mount("root", "root", "", syscall.MS_BIND|syscall.MS_PRIVATE, ""))
+}
+
+func pivotRoot() error {
+	if err := syscall.PivotRoot("root", "root/.old"); err != nil {
+		return errors.WithStack(err)
+	}
+	if err := os.Chdir("/"); err != nil {
+		return errors.WithStack(err)
+	}
+	if err := syscall.Mount("", ".old", "", syscall.MS_PRIVATE|syscall.MS_REC, ""); err != nil {
+		return errors.WithStack(err)
+	}
+	if err := syscall.Unmount(".old", syscall.MNT_DETACH); err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(os.Remove(".old"))
+}
+
+func populateDev() error {
+	devDir := "root/dev"
+	if err := os.Mkdir(devDir, 0o755); err != nil && !os.IsExist(err) {
+		return errors.WithStack(err)
+	}
+	if err := syscall.Mount("none", devDir, "tmpfs", 0, "size=4m"); err != nil {
+		return errors.WithStack(err)
+	}
+	for _, dev := range []string{"console", "null", "zero", "random", "urandom"} {
+		devPath := filepath.Join(devDir, dev)
+
+		f, err := os.OpenFile(devPath, os.O_CREATE|os.O_RDONLY, 0o644)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if err := f.Close(); err != nil {
+			return errors.WithStack(err)
+		}
+		if err := syscall.Mount(filepath.Join("/dev", dev), devPath, "",
+			syscall.MS_BIND|syscall.MS_PRIVATE, ""); err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	links := map[string]string{
+		"fd":     "/proc/self/fd",
+		"stdin":  "/dev/fd/0",
+		"stdout": "/dev/fd/1",
+		"stderr": "/dev/fd/2",
+	}
+	for newName, oldName := range links {
+		if err := os.Symlink(oldName, devDir+"/"+newName); err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	return nil
 }
