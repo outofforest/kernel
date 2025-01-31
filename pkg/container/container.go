@@ -4,18 +4,27 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 
+	"github.com/outofforest/cloudless/cnet"
 	"github.com/outofforest/cloudless/pkg/container/cache"
 	"github.com/outofforest/cloudless/pkg/host"
+	"github.com/outofforest/cloudless/pkg/parse"
 	"github.com/outofforest/cloudless/pkg/retry"
 	"github.com/outofforest/parallel"
 )
@@ -24,26 +33,58 @@ const containerRoot = "/tmp/containers"
 
 // Config represents container configuration.
 type Config struct {
+	Name     string
+	Networks []NetworkConfig
+}
+
+// NetworkConfig represents container's network configuration.
+type NetworkConfig struct {
+	Name string
+	MAC  net.HardwareAddr
 }
 
 // Configurator defines function setting the container configuration.
 type Configurator func(config *Config)
 
+// RunImageConfig represents container image execution configuration.
+type RunImageConfig struct {
+}
+
+// RunImageConfigurator defines function setting the container image execution configuration.
+type RunImageConfigurator func(config *RunImageConfig)
+
 // New creates container.
-func New(name, imageTag string, configurators ...Configurator) host.Configurator {
+func New(name string, configurators ...Configurator) host.Configurator {
 	return func(c *host.Configuration) error {
-		var config Config
+		config := Config{
+			Name: name,
+		}
 
 		for _, configurator := range configurators {
 			configurator(&config)
 		}
 
-		c.RequireContainers(imageTag)
 		c.StartServices(host.ServiceConfig{
 			Name:   "container-" + name,
 			OnExit: parallel.Continue,
 			TaskFn: func(ctx context.Context) error {
-				return inflateImage(ctx, name, imageTag, c.ContainerMirrors())
+				cmd, err := command(config)
+				if err != nil {
+					return err
+				}
+				if err := cmd.Start(); err != nil {
+					return errors.WithStack(err)
+				}
+
+				if err := joinNetworks(cmd.Process.Pid, config); err != nil {
+					return err
+				}
+
+				if err := cmd.Process.Signal(syscall.SIGUSR1); err != nil {
+					return errors.WithStack(err)
+				}
+
+				return errors.WithStack(cmd.Wait())
 			},
 		})
 
@@ -51,7 +92,144 @@ func New(name, imageTag string, configurators ...Configurator) host.Configurator
 	}
 }
 
-func inflateImage(ctx context.Context, name, imageTag string, mirrors []string) error {
+// Network adds network to the config.
+func Network(name, mac string) Configurator {
+	return func(c *Config) {
+		c.Networks = append(c.Networks, NetworkConfig{
+			Name: name,
+			MAC:  parse.MAC(mac),
+		})
+	}
+}
+
+// RunImage runs image.
+func RunImage(imageTag string, configurators ...RunImageConfigurator) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.RequireContainers(imageTag)
+		c.StartServices(host.ServiceConfig{
+			Name:   "image-" + imageTag,
+			OnExit: parallel.Continue,
+			TaskFn: func(ctx context.Context) error {
+				if !c.IsContainer() {
+					return errors.New("image must be run inside container")
+				}
+
+				var config RunImageConfig
+
+				for _, configurator := range configurators {
+					configurator(&config)
+				}
+
+				return inflateImage(ctx, imageTag, c.ContainerMirrors())
+			},
+		})
+
+		return nil
+	}
+}
+
+func command(config Config) (*exec.Cmd, error) {
+	containerDir := filepath.Join(containerRoot, config.Name)
+	if err := os.MkdirAll(containerDir, 0o700); err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	cmd := exec.Command("/proc/self/exe")
+	cmd.Dir = containerDir
+	cmd.Stdin = nil
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = []string{host.ContainerEnvVar + "=" + config.Name}
+	cmd.SysProcAttr = &unix.SysProcAttr{
+		Pdeathsig: unix.SIGKILL,
+		Cloneflags: unix.CLONE_NEWPID |
+			unix.CLONE_NEWNS |
+			unix.CLONE_NEWUSER |
+			unix.CLONE_NEWIPC |
+			unix.CLONE_NEWUTS |
+			unix.CLONE_NEWCGROUP |
+			unix.CLONE_NEWNET,
+		AmbientCaps: []uintptr{
+			unix.CAP_SYS_ADMIN, // by adding CAP_SYS_ADMIN executor may mount /proc
+		},
+		UidMappings: []syscall.SysProcIDMap{
+			{
+				HostID:      0,
+				ContainerID: 0,
+				Size:        65535,
+			},
+		},
+		GidMappingsEnableSetgroups: true,
+		GidMappings: []syscall.SysProcIDMap{
+			{
+				HostID:      0,
+				ContainerID: 0,
+				Size:        65535,
+			},
+		},
+	}
+
+	return cmd, nil
+}
+
+func joinNetworks(pid int, config Config) error {
+	for _, n := range config.Networks {
+		link, err := netlink.LinkByName(cnet.BridgeName(n.Name))
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		bridgeLink, ok := link.(*netlink.Bridge)
+		if !ok {
+			return errors.New("link is not a bridge")
+		}
+
+		name := vethName(config.Name, n.Name)
+		hostVETHName := name + "0"
+		containerVETHName := name + "1"
+
+		vethHost := &netlink.Veth{
+			LinkAttrs: netlink.LinkAttrs{
+				Name: hostVETHName,
+			},
+			PeerName:         containerVETHName,
+			PeerHardwareAddr: n.MAC,
+		}
+
+		if err := netlink.LinkAdd(vethHost); err != nil {
+			return errors.WithStack(err)
+		}
+
+		if err := netlink.LinkSetUp(vethHost); err != nil {
+			return errors.WithStack(err)
+		}
+
+		if err := netlink.LinkSetMaster(vethHost, bridgeLink); err != nil {
+			return errors.WithStack(err)
+		}
+
+		vethContainer, err := netlink.LinkByName(containerVETHName)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
+		if err := netlink.LinkSetNsPid(vethContainer, pid); err != nil {
+			return errors.WithStack(err)
+		}
+	}
+
+	return nil
+}
+
+func vethName(container, network string) string {
+	hash := sha256.Sum256([]byte(container + "_" + network))
+	name := "cv" + hex.EncodeToString(hash[:])
+	if len(name) > 14 {
+		name = name[:14]
+	}
+	return name
+}
+
+func inflateImage(ctx context.Context, imageTag string, mirrors []string) error {
 	mirror := mirrors[0]
 	manifestFile, err := cache.ManifestFile(imageTag)
 	if err != nil {
@@ -106,7 +284,7 @@ func inflateImage(ctx context.Context, name, imageTag string, mirrors []string) 
 				return retry.Retriable(errors.Errorf("unexpected status code %d", resp.StatusCode))
 			}
 
-			return inflateBlob(resp.Body, filepath.Join(containerRoot, name))
+			return inflateBlob(resp.Body)
 		}); err != nil {
 			return err
 		}
@@ -116,11 +294,7 @@ func inflateImage(ctx context.Context, name, imageTag string, mirrors []string) 
 }
 
 //nolint:gocyclo
-func inflateBlob(r io.Reader, path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-
+func inflateBlob(r io.Reader) error {
 	gr, err := gzip.NewReader(r)
 	if err != nil {
 		return errors.WithStack(err)
@@ -144,19 +318,6 @@ loop:
 		// We take mode from header.FileInfo().Mode(), not from header.Mode because they may be in different formats
 		// (meaning of bits may be different). header.FileInfo().Mode() returns compatible value.
 		mode := header.FileInfo().Mode()
-		header.Name = filepath.Clean(filepath.Join(path, header.Name))
-		if !strings.HasPrefix(header.Name, path+"/") {
-			// It means image tries to create files outside its root. We don't like it.
-			return errors.Errorf("image tries to create files outside its root: %q", header.Name)
-		}
-		if header.Linkname != "" {
-			linkName := filepath.Clean(filepath.Join(path, header.Linkname))
-			if !strings.HasPrefix(linkName, path+"/") {
-				// It means image tries to link to files outside its root. We don't like it.
-				// We don't return error because for some reason images try to do this.
-				continue loop
-			}
-		}
 
 		switch {
 		case filepath.Base(header.Name) == ".wh..wh..plnk":
@@ -215,7 +376,6 @@ loop:
 				return errors.WithStack(err)
 			}
 		case header.Typeflag == tar.TypeLink:
-			header.Linkname = filepath.Clean(filepath.Join(path, header.Linkname))
 			// linked file may not exist yet, so let's create it - it will be overwritten later
 			if err := os.MkdirAll(filepath.Dir(header.Linkname), 0o700); err != nil {
 				return errors.WithStack(err)

@@ -104,7 +104,7 @@ func New(name string, cores, memory uint64, configurators ...Configurator) host.
 	}
 }
 
-// Network adds Config to the network.
+// Network adds network to the config.
 func Network(name, mac string) Configurator {
 	return func(vm *Config) {
 		vm.Networks = append(vm.Networks, NetworkConfig{

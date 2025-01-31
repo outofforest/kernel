@@ -36,8 +36,8 @@ func Deployment(configurators ...host.Configurator) []host.Configurator {
 	return configurators
 }
 
-// Host defines host configuration.
-func Host(hostname string, configurators ...host.Configurator) host.Configurator {
+// Box defines system configuration.
+func Box(hostname string, configurators ...host.Configurator) host.Configurator {
 	return func(c *host.Configuration) error {
 		cfg, mergeFn := host.NewSubconfiguration(c)
 		cfg.SetHostname(hostname)
@@ -115,7 +115,10 @@ func KernelModules(modules ...kernel.Module) host.Configurator {
 
 // ImmediateKernelModules load kernel modules immediately.
 func ImmediateKernelModules(modules ...kernel.Module) host.Configurator {
-	return func(_ *host.Configuration) error {
+	return func(c *host.Configuration) error {
+		if c.IsContainer() {
+			return nil
+		}
 		return host.ConfigureKernelModules(modules)
 	}
 }

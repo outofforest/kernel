@@ -2,6 +2,7 @@ package main
 
 import (
 	. "github.com/outofforest/cloudless" //nolint:stylecheck
+	"github.com/outofforest/cloudless/cnet"
 	"github.com/outofforest/cloudless/pkg/acpi"
 	"github.com/outofforest/cloudless/pkg/container"
 	containercache "github.com/outofforest/cloudless/pkg/container/cache"
@@ -22,7 +23,7 @@ var deployment = Deployment(
 	acpi.PowerService(),
 	ntp.Service(),
 	ssh.Service("AAAAC3NzaC1lZDI1NTE5AAAAIEcJvvtOBgTsm3mq3Sg8cjn6Mz/vC9f3k6a89ZOjIyF6"),
-	Host("pxe",
+	Box("pxe",
 		Gateway("10.0.0.1"),
 		Network("00:01:0a:00:00:05", "10.0.0.100/24", "fe80::1/10"),
 		pxe.Service("/dev/sda"),
@@ -46,7 +47,7 @@ var deployment = Deployment(
 			),
 		),
 	),
-	Host("demo",
+	Box("demo",
 		Gateway("10.0.0.1"),
 		Network("00:01:0a:00:00:9b", "10.0.0.155/24"),
 		vnet.NAT("internal", "52:54:00:6d:94:c0",
@@ -57,11 +58,22 @@ var deployment = Deployment(
 			vm.Network("internal", "00:01:0a:00:02:05"),
 		),
 	),
-	Host("vm",
+	Box("vm",
 		Gateway("10.0.1.1"),
 		Network("00:01:0a:00:02:05", "10.0.1.2/24"),
+		cnet.NAT("monitoring",
+			cnet.IP4("10.0.2.1/24"),
+		),
 		container.New("grafana",
-			"grafana/grafana@sha256:58aeabeae706b990b3b1fc5ae8c97fd131921b2d6eb26a137ebaa91689d6ebfe"),
+			container.Network("monitoring", "52:54:00:6e:94:c0"),
+		),
+	),
+	Box("grafana",
+		Gateway("10.0.2.1"),
+		Network("52:54:00:6e:94:c0", "10.0.2.2/24"),
+		container.RunImage(
+			"grafana/grafana@sha256:58aeabeae706b990b3b1fc5ae8c97fd131921b2d6eb26a137ebaa91689d6ebfe",
+		),
 	),
 )
 
