@@ -1,15 +1,13 @@
 package main
 
 import (
-	"path/filepath"
-
 	. "github.com/outofforest/cloudless" //nolint:stylecheck
 	"github.com/outofforest/cloudless/pkg/acpi"
 	"github.com/outofforest/cloudless/pkg/cnet"
 	"github.com/outofforest/cloudless/pkg/container"
 	containercache "github.com/outofforest/cloudless/pkg/container/cache"
 	"github.com/outofforest/cloudless/pkg/dns"
-	"github.com/outofforest/cloudless/pkg/host/firewall"
+	"github.com/outofforest/cloudless/pkg/grafana"
 	"github.com/outofforest/cloudless/pkg/ntp"
 	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/cloudless/pkg/ssh"
@@ -84,18 +82,7 @@ var deployment = Deployment(
 	Container("grafana",
 		Gateway("10.0.2.1"),
 		Network("52:54:00:6e:94:c0", "10.0.2.2/24"),
-		Firewall(firewall.OpenV4TCPPort(80)),
-		container.AppMount("/tmp/app/grafana"),
-		container.RunImage(
-			"grafana/grafana@sha256:58aeabeae706b990b3b1fc5ae8c97fd131921b2d6eb26a137ebaa91689d6ebfe",
-			container.EnvVar("GF_USERS_ALLOW_SIGN_UP", "false"),
-			container.EnvVar("GF_PATHS_PROVISIONING", filepath.Join(container.AppDir, "provisioning")),
-			container.EnvVar("GF_PATHS_DATA", filepath.Join(container.AppDir, "data")),
-			container.EnvVar("GF_SERVER_HTTP_PORT", "80"),
-			container.EnvVar("GF_LOG_MODE", "console"),
-			container.EnvVar("GF_LOG_CONSOLE_LEVEL", "info"),
-			container.EnvVar("GF_LOG_CONSOLE_FORMAT", "json"),
-		),
+		grafana.Container("/tmp/app/grafana"),
 	),
 )
 

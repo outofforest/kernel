@@ -77,6 +77,19 @@ func BoxFactory(configurators ...host.Configurator) BoxFunc {
 	}
 }
 
+// Join combines many configurator into a single one.
+func Join(configurators ...host.Configurator) host.Configurator {
+	return func(c *host.Configuration) error {
+		for _, configurator := range configurators {
+			if err := configurator(c); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+}
+
 // Gateway defines gateway.
 func Gateway(gateway string) host.Configurator {
 	ip := parse.IP4(gateway)
