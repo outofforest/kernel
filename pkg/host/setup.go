@@ -157,9 +157,16 @@ func NewSubconfiguration(c *Configuration) (*Configuration, func()) {
 		c.AddNetworks(c2.networks...)
 		c.AddFirewallRules(c2.firewall...)
 		c.AddHugePages(c2.hugePages)
+		c.mounts = append(c.mounts, c2.mounts...)
 		c.Prepare(c2.prepare...)
 		c.StartServices(c2.services...)
 	}
+}
+
+type mountConfig struct {
+	Source   string
+	Target   string
+	Writable bool
 }
 
 // Configuration allows service to configure the required host settings.
@@ -184,6 +191,7 @@ type Configuration struct {
 	hugePages           uint64
 	prepare             []PrepareFn
 	services            []ServiceConfig
+	mounts              []mountConfig
 }
 
 // IsContainer informs if configurator is executed in the context of container.
@@ -278,6 +286,15 @@ func (c *Configuration) AddHugePages(hugePages uint64) {
 	c.hugePages += hugePages
 }
 
+// AddMount adds mount.
+func (c *Configuration) AddMount(source, target string, writable bool) {
+	c.mounts = append(c.mounts, mountConfig{
+		Source:   source,
+		Target:   target,
+		Writable: writable,
+	})
+}
+
 // Prepare adds prepare function to be called.
 func (c *Configuration) Prepare(prepares ...PrepareFn) {
 	c.prepare = append(c.prepare, prepares...)
@@ -303,6 +320,10 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 	cfg.topConfig = cfg
 
 	if cfg.isContainer {
+		if err := mount.ContainerRootPrepare(); err != nil {
+			return err
+		}
+
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGUSR1)
 		defer signal.Stop(sig)
@@ -311,10 +332,6 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 		case <-sig:
 		case <-ctx.Done():
 			return errors.WithStack(ctx.Err())
-		}
-
-		if err := mount.ContainerRoot(); err != nil {
-			return err
 		}
 	} else {
 		if err := mount.HostRoot(); err != nil {
@@ -341,7 +358,7 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 		return errors.New("host does not match the configuration")
 	}
 
-	ctx = logger.With(ctx, zap.String("host", cfg.hostname))
+	ctx = logger.With(ctx, zap.String("box", cfg.hostname))
 
 	//nolint:nestif
 	if !cfg.isContainer {
@@ -358,6 +375,16 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 			return err
 		}
 		if err := ConfigureKernelModules(cfg.kernelModules); err != nil {
+			return err
+		}
+	}
+
+	if err := configureMounts(cfg.mounts); err != nil {
+		return err
+	}
+
+	if cfg.isContainer {
+		if err := mount.ContainerRoot(); err != nil {
 			return err
 		}
 	}
@@ -793,6 +820,62 @@ func configureHugePages(hugePages uint64) error {
 
 	return errors.WithStack(os.WriteFile("/proc/sys/vm/nr_hugepages",
 		[]byte(strconv.FormatUint(hugePages, 10)), 0o644))
+}
+
+func configureMounts(mounts []mountConfig) error {
+	for _, m := range mounts {
+		info, err := os.Stat(m.Source)
+		switch {
+		case err == nil:
+		case os.IsNotExist(err):
+			if err := os.MkdirAll(m.Source, 0o700); err != nil {
+				return errors.WithStack(err)
+			}
+			var err error
+			info, err = os.Stat(m.Source)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		case err != nil:
+			return errors.WithStack(err)
+		}
+
+		//nolint:nestif
+		if info.IsDir() {
+			if err := os.MkdirAll(m.Target, 0o700); err != nil {
+				return errors.WithStack(err)
+			}
+		} else {
+			if err := os.MkdirAll(filepath.Dir(m.Target), 0o700); err != nil {
+				return errors.WithStack(err)
+			}
+			err := func() error {
+				f, err := os.OpenFile(m.Target, os.O_CREATE|os.O_WRONLY|os.O_EXCL, info.Mode())
+				if err != nil {
+					if os.IsExist(err) {
+						return nil
+					}
+					return errors.WithStack(err)
+				}
+				return errors.WithStack(f.Close())
+			}()
+			if err != nil {
+				return err
+			}
+		}
+		if err := syscall.Mount(m.Source, m.Target, "",
+			syscall.MS_BIND|syscall.MS_PRIVATE, ""); err != nil {
+			return errors.WithStack(err)
+		}
+		if !m.Writable {
+			if err := syscall.Mount(m.Source, m.Target, "",
+				syscall.MS_BIND|syscall.MS_PRIVATE|syscall.MS_REMOUNT|syscall.MS_RDONLY, ""); err != nil {
+				return errors.WithStack(err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func setupVirt(c *Configuration) {

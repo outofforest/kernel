@@ -3,12 +3,14 @@ package cloudless
 import (
 	"bytes"
 	"net"
+	"path/filepath"
 	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
 
 	"github.com/outofforest/cloudless/pkg/host"
+	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/parse"
 )
@@ -148,6 +150,25 @@ func YumMirrors(mirrors ...string) host.Configurator {
 func ContainerMirrors(mirrors ...string) host.Configurator {
 	return func(c *host.Configuration) error {
 		c.AddContainerMirrors(mirrors...)
+		return nil
+	}
+}
+
+// Mount defines mount.
+func Mount(source, target string, writable bool) host.Configurator {
+	return func(c *host.Configuration) error {
+		if c.IsContainer() {
+			target = filepath.Join(".", target)
+		}
+		c.AddMount(source, target, writable)
+		return nil
+	}
+}
+
+// Firewall adds firewall rules.
+func Firewall(sources ...firewall.RuleSource) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.AddFirewallRules(sources...)
 		return nil
 	}
 }
