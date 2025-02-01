@@ -67,6 +67,16 @@ func Box(hostname string, configurators ...host.Configurator) host.Configurator 
 	}
 }
 
+// BoxFunc is the function configuring box.
+type BoxFunc func(hostname string, configurators ...host.Configurator) host.Configurator
+
+// BoxFactory returns box factory with preconfigured components.
+func BoxFactory(configurators ...host.Configurator) BoxFunc {
+	return func(hostname string, configurators2 ...host.Configurator) host.Configurator {
+		return Box(hostname, append(append([]host.Configurator{}, configurators...), configurators2...)...)
+	}
+}
+
 // Gateway defines gateway.
 func Gateway(gateway string) host.Configurator {
 	ip := parse.IP4(gateway)

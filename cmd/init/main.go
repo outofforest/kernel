@@ -18,15 +18,25 @@ import (
 	"github.com/outofforest/cloudless/pkg/yum"
 )
 
+var (
+	// Host configures hosts.
+	Host = BoxFactory(
+		YumMirrors("http://10.0.0.100"),
+		acpi.PowerService(),
+		ntp.Service(),
+		ssh.Service("AAAAC3NzaC1lZDI1NTE5AAAAIEcJvvtOBgTsm3mq3Sg8cjn6Mz/vC9f3k6a89ZOjIyF6"),
+	)
+
+	// Container configures containers.
+	Container = BoxFactory(
+		ContainerMirrors("http://10.0.0.100:81"),
+	)
+)
+
 var deployment = Deployment(
 	ImmediateKernelModules(DefaultKernelModules...),
 	DNS(DefaultDNS...),
-	YumMirrors("http://10.0.0.100"),
-	ContainerMirrors("http://10.0.0.100:81"),
-	acpi.PowerService(),
-	ntp.Service(),
-	ssh.Service("AAAAC3NzaC1lZDI1NTE5AAAAIEcJvvtOBgTsm3mq3Sg8cjn6Mz/vC9f3k6a89ZOjIyF6"),
-	Box("pxe",
+	Host("pxe",
 		Gateway("10.0.0.1"),
 		Network("00:01:0a:00:00:05", "10.0.0.100/24", "fe80::1/10"),
 		pxe.Service("/dev/sda"),
@@ -50,7 +60,7 @@ var deployment = Deployment(
 			),
 		),
 	),
-	Box("demo",
+	Host("demo",
 		Gateway("10.0.0.1"),
 		Network("00:01:0a:00:00:9b", "10.0.0.155/24"),
 		vnet.NAT("internal", "52:54:00:6d:94:c0",
@@ -61,7 +71,7 @@ var deployment = Deployment(
 			vm.Network("internal", "00:01:0a:00:02:05"),
 		),
 	),
-	Box("vm",
+	Host("vm",
 		Gateway("10.0.1.1"),
 		Network("00:01:0a:00:02:05", "10.0.1.2/24"),
 		cnet.NAT("monitoring",
@@ -71,7 +81,7 @@ var deployment = Deployment(
 			container.Network("monitoring", "52:54:00:6e:94:c0"),
 		),
 	),
-	Box("grafana",
+	Container("grafana",
 		Gateway("10.0.2.1"),
 		Network("52:54:00:6e:94:c0", "10.0.2.2/24"),
 		Firewall(firewall.OpenV4TCPPort(80)),

@@ -37,10 +37,6 @@ var servers = []string{
 // Service creates new NTP service.
 func Service() host.Configurator {
 	return func(c *host.Configuration) error {
-		if c.IsContainer() {
-			return nil
-		}
-
 		c.StartServices(host.ServiceConfig{
 			Name:   "ntp",
 			OnExit: parallel.Fail,
