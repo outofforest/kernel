@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,20 +22,28 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
-	"github.com/outofforest/cloudless/cnet"
+	"github.com/outofforest/cloudless"
+	"github.com/outofforest/cloudless/pkg/cnet"
 	"github.com/outofforest/cloudless/pkg/container/cache"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/parse"
 	"github.com/outofforest/cloudless/pkg/retry"
+	"github.com/outofforest/libexec"
 	"github.com/outofforest/parallel"
 )
 
-const containerRoot = "/tmp/containers"
+const (
+	containerRoot = "/tmp/containers"
+
+	// AppDir is the path inside container where application's directory is mounted.
+	AppDir = "/app"
+)
 
 // Config represents container configuration.
 type Config struct {
-	Name     string
-	Networks []NetworkConfig
+	Name         string
+	Networks     []NetworkConfig
+	ExposedPorts []ExposedPortConfig
 }
 
 // NetworkConfig represents container's network configuration.
@@ -48,6 +57,26 @@ type Configurator func(config *Config)
 
 // RunImageConfig represents container image execution configuration.
 type RunImageConfig struct {
+	// EnvVars sets environment variables inside container.
+	EnvVars map[string]string
+
+	// WorkingDir specifies a path to working directory.
+	WorkingDir string
+
+	// Entrypoint sets entrypoint for container.
+	Entrypoint []string
+
+	// Cmd sets command to execute inside container.
+	Cmd []string
+}
+
+// ExposedPortConfig defines a port to be exposed from the container.
+type ExposedPortConfig struct {
+	Protocol      string
+	HostIP        net.IP
+	HostPort      uint16
+	NamespacePort uint16
+	Public        bool
 }
 
 // RunImageConfigurator defines function setting the container image execution configuration.
@@ -102,30 +131,129 @@ func Network(name, mac string) Configurator {
 	}
 }
 
+// Expose exposes container's port.
+func Expose(proto, hostIP string, hostPort, containerPort uint16, public bool) Configurator {
+	hostIPParsed := parse.IP4(hostIP)
+	return func(config *Config) {
+		config.ExposedPorts = append(config.ExposedPorts, ExposedPortConfig{
+			Protocol:      proto,
+			HostIP:        hostIPParsed,
+			HostPort:      hostPort,
+			NamespacePort: containerPort,
+			Public:        public,
+		})
+	}
+}
+
 // RunImage runs image.
 func RunImage(imageTag string, configurators ...RunImageConfigurator) host.Configurator {
 	return func(c *host.Configuration) error {
 		c.RequireContainers(imageTag)
 		c.StartServices(host.ServiceConfig{
 			Name:   "image-" + imageTag,
-			OnExit: parallel.Continue,
+			OnExit: parallel.Fail,
 			TaskFn: func(ctx context.Context) error {
 				if !c.IsContainer() {
 					return errors.New("image must be run inside container")
 				}
 
-				var config RunImageConfig
+				m, err := fetchManifest(ctx, imageTag, c.ContainerMirrors())
+				if err != nil {
+					return err
+				}
+
+				ic, err := fetchConfig(ctx, imageTag, m, c.ContainerMirrors())
+				if err != nil {
+					return err
+				}
+
+				config := RunImageConfig{
+					Entrypoint: ic.Config.Entrypoint,
+					Cmd:        ic.Config.Cmd,
+					WorkingDir: ic.Config.WorkingDir,
+					EnvVars:    map[string]string{},
+				}
+
+				for _, ev := range ic.Config.Env {
+					pos := strings.Index(ev, "=")
+					if pos < 0 {
+						continue
+					}
+
+					evName := strings.TrimSpace(ev[:pos])
+					if evName == "" {
+						continue
+					}
+					evValue := strings.TrimSpace(ev[pos+1:])
+					if evValue == "" {
+						delete(config.EnvVars, evName)
+						continue
+					}
+
+					config.EnvVars[evName] = evValue
+				}
 
 				for _, configurator := range configurators {
 					configurator(&config)
 				}
 
-				return inflateImage(ctx, imageTag, c.ContainerMirrors())
+				args := append(append([]string{}, config.Entrypoint...), config.Cmd...)
+				if len(args) == 0 {
+					return errors.Errorf("no command specified")
+				}
+				envVars := make([]string, 0, len(config.EnvVars))
+				for k, v := range config.EnvVars {
+					envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
+				}
+
+				if err := inflateImage(ctx, imageTag, m, c.ContainerMirrors()); err != nil {
+					return err
+				}
+
+				return libexec.Exec(ctx, &exec.Cmd{
+					Path: args[0],
+					Args: args,
+					Env:  envVars,
+					Dir:  config.WorkingDir,
+				})
 			},
 		})
 
 		return nil
 	}
+}
+
+// EnvVar sets environment variable inside container.
+func EnvVar(name, value string) RunImageConfigurator {
+	return func(config *RunImageConfig) {
+		config.EnvVars[name] = value
+	}
+}
+
+// WorkingDir sets working directory inside container.
+func WorkingDir(workingDir string) RunImageConfigurator {
+	return func(config *RunImageConfig) {
+		config.WorkingDir = workingDir
+	}
+}
+
+// Entrypoint sets container's entrypoint.
+func Entrypoint(entrypoint ...string) RunImageConfigurator {
+	return func(config *RunImageConfig) {
+		config.Entrypoint = entrypoint
+	}
+}
+
+// Cmd sets command to execute inside container.
+func Cmd(args ...string) RunImageConfigurator {
+	return func(config *RunImageConfig) {
+		config.Cmd = args
+	}
+}
+
+// AppMount returns docker volume definition for app's directory.
+func AppMount(hostAppDir string) host.Configurator {
+	return cloudless.Mount(hostAppDir, AppDir, true)
 }
 
 func command(config Config) (*exec.Cmd, error) {
@@ -229,16 +357,16 @@ func vethName(container, network string) string {
 	return name
 }
 
-func inflateImage(ctx context.Context, imageTag string, mirrors []string) error {
+func fetchManifest(ctx context.Context, imageTag string, mirrors []string) (cache.Manifest, error) {
 	mirror := mirrors[0]
 	manifestFile, err := cache.ManifestFile(imageTag)
 	if err != nil {
-		return err
+		return cache.Manifest{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+manifestFile, nil)
 	if err != nil {
-		return errors.WithStack(err)
+		return cache.Manifest{}, errors.WithStack(err)
 	}
 
 	var m cache.Manifest
@@ -253,15 +381,48 @@ func inflateImage(ctx context.Context, imageTag string, mirrors []string) error 
 			return retry.Retriable(errors.Errorf("unexpected status code %d", resp.StatusCode))
 		}
 
-		if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-			return retry.Retriable(errors.WithStack(err))
-		}
-
-		return nil
+		return retry.Retriable(json.NewDecoder(resp.Body).Decode(&m))
 	}); err != nil {
-		return err
+		return cache.Manifest{}, err
 	}
 
+	return m, nil
+}
+
+func fetchConfig(ctx context.Context, imageTag string, m cache.Manifest, mirrors []string) (imageConfig, error) {
+	mirror := mirrors[0]
+	blobFile, err := cache.BlobFile(imageTag, m.Config.Digest)
+	if err != nil {
+		return imageConfig{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+blobFile, nil)
+	if err != nil {
+		return imageConfig{}, errors.WithStack(err)
+	}
+
+	var ic imageConfig
+	if err := retry.Do(ctx, retry.FixedConfig{RetryAfter: 5 * time.Second, MaxAttempts: 10}, func() error {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return retry.Retriable(errors.WithStack(err))
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return retry.Retriable(errors.Errorf("unexpected status code %d", resp.StatusCode))
+		}
+
+		return retry.Retriable(json.NewDecoder(resp.Body).Decode(&ic))
+	}); err != nil {
+		return imageConfig{}, err
+	}
+
+	return ic, nil
+}
+
+func inflateImage(ctx context.Context, imageTag string, m cache.Manifest, mirrors []string) error {
+	mirror := mirrors[0]
 	for _, layer := range m.Layers {
 		blobFile, err := cache.BlobFile(imageTag, layer.Digest)
 		if err != nil {
@@ -411,4 +572,13 @@ loop:
 		}
 	}
 	return nil
+}
+
+type imageConfig struct {
+	Config struct {
+		Env        []string
+		Entrypoint []string
+		Cmd        []string
+		WorkingDir string
+	} `json:"config"`
 }

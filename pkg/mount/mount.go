@@ -101,13 +101,31 @@ func HostRoot() error {
 	return HugeTlbFs("/dev/hugepages")
 }
 
-// ContainerRoot mounts container root filesystem.
-func ContainerRoot() error {
-	if err := prepareRoot(); err != nil {
-		return err
+// ContainerRootPrepare prepares container root directory.
+func ContainerRootPrepare() error {
+	// systemd remounts everything as MS_SHARED, to prevent mess let's remount everything back to
+	// MS_PRIVATE inside namespace
+	if err := syscall.Mount("", "/", "", syscall.MS_SLAVE|syscall.MS_REC, ""); err != nil {
+		return errors.WithStack(err)
 	}
 
-	if err := ProcFS("root/proc"); err != nil {
+	if err := os.MkdirAll("root/.old", 0o700); err != nil {
+		return errors.WithStack(err)
+	}
+
+	// PivotRoot requires new root to be on different mountpoint, so let's bind it to itself
+	if err := syscall.Mount(".", ".", "", syscall.MS_BIND|syscall.MS_PRIVATE, ""); err != nil {
+		return errors.WithStack(err)
+	}
+	if err := syscall.Mount("root", "root", "", syscall.MS_BIND|syscall.MS_PRIVATE, ""); err != nil {
+		return errors.WithStack(err)
+	}
+	return errors.WithStack(os.Chdir("root"))
+}
+
+// ContainerRoot mounts container root filesystem.
+func ContainerRoot() error {
+	if err := ProcFS("proc"); err != nil {
 		return err
 	}
 	if err := populateDev(); err != nil {
@@ -203,26 +221,8 @@ func ensureDir(file string) error {
 	return errors.WithStack(os.MkdirAll(filepath.Dir(file), 0o700))
 }
 
-func prepareRoot() error {
-	// systemd remounts everything as MS_SHARED, to prevent mess let's remount everything back to
-	// MS_PRIVATE inside namespace
-	if err := syscall.Mount("", "/", "", syscall.MS_SLAVE|syscall.MS_REC, ""); err != nil {
-		return errors.WithStack(err)
-	}
-
-	if err := os.MkdirAll("root/.old", 0o700); err != nil {
-		return errors.WithStack(err)
-	}
-
-	// PivotRoot requires new root to be on different mountpoint, so let's bind it to itself
-	if err := syscall.Mount(".", ".", "", syscall.MS_BIND|syscall.MS_PRIVATE, ""); err != nil {
-		return errors.WithStack(err)
-	}
-	return errors.WithStack(syscall.Mount("root", "root", "", syscall.MS_BIND|syscall.MS_PRIVATE, ""))
-}
-
 func pivotRoot() error {
-	if err := syscall.PivotRoot("root", "root/.old"); err != nil {
+	if err := syscall.PivotRoot(".", ".old"); err != nil {
 		return errors.WithStack(err)
 	}
 	if err := os.Chdir("/"); err != nil {
@@ -238,7 +238,7 @@ func pivotRoot() error {
 }
 
 func populateDev() error {
-	devDir := "root/dev"
+	devDir := "dev"
 	if err := os.Mkdir(devDir, 0o755); err != nil && !os.IsExist(err) {
 		return errors.WithStack(err)
 	}

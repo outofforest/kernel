@@ -17,7 +17,7 @@ func Main(deployment ...host.Configurator) {
 	run.New().Run(context.Background(), "cloudless", func(ctx context.Context) error {
 		defer time.Sleep(120 * time.Second)
 
-		fmt.Println("I am cloudless init process.")
+		fmt.Print(banner)
 
 		err := host.Run(ctx, deployment...)
 		if err != nil {
