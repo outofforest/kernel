@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -38,6 +39,10 @@ const (
 	// AppDir is the path inside container where application's directory is mounted.
 	AppDir = "/app"
 )
+
+var protectedFiles = map[string]struct{}{
+	"/etc/resolv.conf": {},
+}
 
 // Config represents container configuration.
 type Config struct {
@@ -95,9 +100,9 @@ func New(name string, configurators ...Configurator) host.Configurator {
 
 		c.StartServices(host.ServiceConfig{
 			Name:   "container-" + name,
-			OnExit: parallel.Continue,
+			OnExit: parallel.Fail,
 			TaskFn: func(ctx context.Context) error {
-				cmd, err := command(config)
+				cmd, err := command(ctx, config)
 				if err != nil {
 					return err
 				}
@@ -256,13 +261,13 @@ func AppMount(hostAppDir string) host.Configurator {
 	return cloudless.Mount(hostAppDir, AppDir, true)
 }
 
-func command(config Config) (*exec.Cmd, error) {
+func command(ctx context.Context, config Config) (*exec.Cmd, error) {
 	containerDir := filepath.Join(containerRoot, config.Name)
 	if err := os.MkdirAll(containerDir, 0o700); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
-	cmd := exec.Command("/proc/self/exe")
+	cmd := exec.CommandContext(ctx, "/proc/self/exe")
 	cmd.Dir = containerDir
 	cmd.Stdin = nil
 	cmd.Stdout = os.Stdout
@@ -295,6 +300,11 @@ func command(config Config) (*exec.Cmd, error) {
 				Size:        65535,
 			},
 		},
+	}
+	cmd.Cancel = func() error {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Process.Signal(syscall.SIGINT)
+		return nil
 	}
 
 	return cmd, nil
@@ -358,19 +368,23 @@ func vethName(container, network string) string {
 }
 
 func fetchManifest(ctx context.Context, imageTag string, mirrors []string) (cache.Manifest, error) {
-	mirror := mirrors[0]
 	manifestFile, err := cache.ManifestFile(imageTag)
 	if err != nil {
 		return cache.Manifest{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+manifestFile, nil)
-	if err != nil {
-		return cache.Manifest{}, errors.WithStack(err)
-	}
-
 	var m cache.Manifest
 	if err := retry.Do(ctx, retry.FixedConfig{RetryAfter: 5 * time.Second, MaxAttempts: 10}, func() error {
+		mirror, err := selectMirror(mirrors)
+		if err != nil {
+			return err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+manifestFile, nil)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return retry.Retriable(errors.WithStack(err))
@@ -390,19 +404,23 @@ func fetchManifest(ctx context.Context, imageTag string, mirrors []string) (cach
 }
 
 func fetchConfig(ctx context.Context, imageTag string, m cache.Manifest, mirrors []string) (imageConfig, error) {
-	mirror := mirrors[0]
 	blobFile, err := cache.BlobFile(imageTag, m.Config.Digest)
 	if err != nil {
 		return imageConfig{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+blobFile, nil)
-	if err != nil {
-		return imageConfig{}, errors.WithStack(err)
-	}
-
 	var ic imageConfig
 	if err := retry.Do(ctx, retry.FixedConfig{RetryAfter: 5 * time.Second, MaxAttempts: 10}, func() error {
+		mirror, err := selectMirror(mirrors)
+		if err != nil {
+			return err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+blobFile, nil)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return retry.Retriable(errors.WithStack(err))
@@ -422,19 +440,23 @@ func fetchConfig(ctx context.Context, imageTag string, m cache.Manifest, mirrors
 }
 
 func inflateImage(ctx context.Context, imageTag string, m cache.Manifest, mirrors []string) error {
-	mirror := mirrors[0]
 	for _, layer := range m.Layers {
 		blobFile, err := cache.BlobFile(imageTag, layer.Digest)
 		if err != nil {
 			return err
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+blobFile, nil)
-		if err != nil {
-			return errors.WithStack(err)
-		}
-
 		if err := retry.Do(ctx, retry.FixedConfig{RetryAfter: 5 * time.Second, MaxAttempts: 10}, func() error {
+			mirror, err := selectMirror(mirrors)
+			if err != nil {
+				return err
+			}
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, mirror+"/"+blobFile, nil)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				return retry.Retriable(errors.WithStack(err))
@@ -469,13 +491,22 @@ loop:
 	for {
 		header, err := tr.Next()
 		switch {
-		case err == io.EOF:
+		case errors.Is(err, io.EOF):
 			break loop
 		case err != nil:
 			return retry.Retriable(err)
 		case header == nil:
 			continue
 		}
+
+		absPath, err := filepath.Abs(header.Name)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if _, exists := protectedFiles[absPath]; exists {
+			continue
+		}
+
 		// We take mode from header.FileInfo().Mode(), not from header.Mode because they may be in different formats
 		// (meaning of bits may be different). header.FileInfo().Mode() returns compatible value.
 		mode := header.FileInfo().Mode()
@@ -572,6 +603,13 @@ loop:
 		}
 	}
 	return nil
+}
+
+func selectMirror(mirrors []string) (string, error) {
+	if len(mirrors) == 0 {
+		return "", errors.New("there are no mirrors")
+	}
+	return mirrors[rand.Intn(len(mirrors))], nil
 }
 
 type imageConfig struct {
