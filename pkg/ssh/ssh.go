@@ -34,10 +34,6 @@ const (
 // Service returns SSH service.
 func Service(authorizedKeys ...string) host.Configurator {
 	return func(c *host.Configuration) error {
-		if c.IsContainer() {
-			return nil
-		}
-
 		c.AddFirewallRules(firewall.OpenV4TCPPort(port))
 		c.StartServices(host.ServiceConfig{
 			Name:   "ssh",

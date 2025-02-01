@@ -21,10 +21,6 @@ const (
 // PowerService creates new ACPI service for powering off and rebooting the host.
 func PowerService() host.Configurator {
 	return func(c *host.Configuration) error {
-		if c.IsContainer() {
-			return nil
-		}
-
 		c.StartServices(host.ServiceConfig{
 			Name:   "acpi-power",
 			OnExit: parallel.Fail,
