@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strconv"
+
 	. "github.com/outofforest/cloudless" //nolint:stylecheck
 	"github.com/outofforest/cloudless/pkg/acpi"
 	"github.com/outofforest/cloudless/pkg/cnet"
@@ -9,7 +11,9 @@ import (
 	"github.com/outofforest/cloudless/pkg/dns"
 	"github.com/outofforest/cloudless/pkg/grafana"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
+	"github.com/outofforest/cloudless/pkg/loki"
 	"github.com/outofforest/cloudless/pkg/ntp"
+	"github.com/outofforest/cloudless/pkg/prometheus"
 	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/cloudless/pkg/ssh"
 	"github.com/outofforest/cloudless/pkg/vm"
@@ -62,32 +66,45 @@ var deployment = Deployment(
 	Host("demo",
 		Gateway("10.0.0.1"),
 		Network("00:01:0a:00:00:9b", "10.0.0.155/24"),
-		vnet.NAT("internal", "52:54:00:6d:94:c0",
-			vnet.IP4("10.0.1.1/24"),
-			vnet.IP6("fdff:8ffd:d676::1/64"),
+		Firewall(
+			// Grafana.
+			firewall.RedirectV4TCPPort("10.0.0.155", 3000, "10.0.1.2", 3000),
 		),
-		vm.New("vm", 5, 4,
-			vm.Network("internal", "00:01:0a:00:02:05"),
-		),
+		vnet.NAT("internal", "52:54:00:6d:94:c0", vnet.IP4("10.0.1.1/24")),
+		vm.New("vm", 5, 4, vm.Network("internal", "00:01:0a:00:02:05")),
 	),
 	Host("vm",
 		Gateway("10.0.1.1"),
 		Network("00:01:0a:00:02:05", "10.0.1.2/24"),
 		Firewall(
 			// Grafana.
-			firewall.RedirectV4TCPPort("10.0.1.2", 8080, "10.0.2.2", grafana.Port),
+			firewall.RedirectV4TCPPort("10.0.1.2", 3000, "10.0.2.2", grafana.Port),
 		),
-		cnet.NAT("monitoring",
-			cnet.IP4("10.0.2.1/24"),
-		),
-		container.New("grafana",
-			container.Network("monitoring", "52:54:00:6e:94:c0"),
-		),
+		cnet.NAT("monitoring", cnet.IP4("10.0.2.1/24")),
+		container.New("grafana", "/tmp/containers/grafana",
+			container.Network("monitoring", "52:54:00:6e:94:c0")),
+		container.New("prometheus", "/tmp/containers/prometheus",
+			container.Network("monitoring", "52:54:00:6e:94:c1")),
+		container.New("loki", "/tmp/containers/loki",
+			container.Network("monitoring", "52:54:00:6e:94:c2")),
 	),
 	Container("grafana",
 		Gateway("10.0.2.1"),
 		Network("52:54:00:6e:94:c0", "10.0.2.2/24"),
-		grafana.Container("/tmp/app/grafana"),
+		grafana.Container("/tmp/app/grafana",
+			grafana.DataSource("Prometheus", grafana.DataSourcePrometheus, "http://10.0.2.3:"+strconv.Itoa(prometheus.Port)),
+			grafana.DataSource("Loki", grafana.DataSourceLoki, "http://10.0.2.4:"+strconv.Itoa(loki.Port)),
+		),
+	),
+	Container("prometheus",
+		Gateway("10.0.2.1"),
+		Network("52:54:00:6e:94:c1", "10.0.2.3/24"),
+		prometheus.Container("/tmp/app/prometheus"),
+	),
+	Container("loki",
+		Gateway("10.0.2.1"),
+		Network("52:54:00:6e:94:c2", "10.0.2.4/24"),
+		loki.Container("/tmp/app/loki"),
 	),
 )
 
