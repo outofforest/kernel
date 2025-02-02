@@ -13,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/parse"
@@ -41,31 +42,31 @@ type Configurator func(vm *Config)
 
 // New creates vm.
 func New(name string, cores, memory uint64, configurators ...Configurator) host.Configurator {
-	return func(c *host.Configuration) error {
-		var vm Config
+	var vm Config
 
-		vmUUID, err := uuid.NewUUID()
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	for _, configurator := range configurators {
+		configurator(&vm)
+	}
 
-		vmlinuz, err := kernelPath()
-		if err != nil {
-			return err
-		}
-
-		for _, configurator := range configurators {
-			configurator(&vm)
-		}
-
-		c.RequireInitramfs()
-		c.RequireVirt()
-		c.RequireKernelModules(kernel.Module{
+	return cloudless.Join(
+		cloudless.CreateInitramfs(),
+		cloudless.StartVirtServices(),
+		cloudless.KernelModules(kernel.Module{
 			Name:   "kvm-intel",
 			Params: "nested=Y",
-		})
-		c.AddHugePages(memory)
-		c.Prepare(func(_ context.Context) error {
+		}),
+		cloudless.AllocateHugePages(memory),
+		cloudless.Prepare(func(_ context.Context) error {
+			vmUUID, err := uuid.NewUUID()
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			vmlinuz, err := kernelPath()
+			if err != nil {
+				return err
+			}
+
 			filePath := fmt.Sprintf("/etc/libvirt/qemu/%s.xml", name)
 			f, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 			if err != nil {
@@ -99,9 +100,8 @@ func New(name string, cores, memory uint64, configurators ...Configurator) host.
 
 			return errors.WithStack(os.Link(filePath,
 				filepath.Join(filepath.Dir(filePath), "autostart", filepath.Base(filePath))))
-		})
-		return nil
-	}
+		}),
+	)
 }
 
 // Network adds network to the config.

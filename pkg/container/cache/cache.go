@@ -19,6 +19,7 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/retry"
@@ -48,22 +49,19 @@ var (
 
 // Service returns new yum repo service.
 func Service(repoRoot string) host.Configurator {
-	return func(c *host.Configuration) error {
-		c.AddFirewallRules(firewall.OpenV4TCPPort(port))
-		c.StartServices(host.ServiceConfig{
-			Name:   "containercache",
-			OnExit: parallel.Continue,
-			TaskFn: func(ctx context.Context) error {
-				images := c.ContainerImages()
-				if len(images) == 0 {
-					return nil
-				}
+	var c *host.Configuration
+	return cloudless.Join(
+		cloudless.Configuration(&c),
+		cloudless.Firewall(firewall.OpenV4TCPPort(port)),
+		cloudless.Service("containercache", parallel.Continue, func(ctx context.Context) error {
+			images := c.ContainerImages()
+			if len(images) == 0 {
+				return nil
+			}
 
-				return run(ctx, repoRoot, images)
-			},
-		})
-		return nil
-	}
+			return run(ctx, repoRoot, images)
+		}),
+	)
 }
 
 func run(ctx context.Context, repoRoot string, images []string) error {

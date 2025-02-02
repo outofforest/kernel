@@ -19,6 +19,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/libexec"
@@ -33,47 +34,42 @@ const (
 
 // Service returns SSH service.
 func Service(authorizedKeys ...string) host.Configurator {
-	return func(c *host.Configuration) error {
-		c.AddFirewallRules(firewall.OpenV4TCPPort(port))
-		c.StartServices(host.ServiceConfig{
-			Name:   "ssh",
-			OnExit: parallel.Fail,
-			TaskFn: func(ctx context.Context) error {
-				if len(authorizedKeys) == 0 {
-					return errors.New("no authorized keys specified")
-				}
+	return cloudless.Join(
+		cloudless.Firewall(firewall.OpenV4TCPPort(port)),
+		cloudless.Service("ssh", parallel.Fail, func(ctx context.Context) error {
+			if len(authorizedKeys) == 0 {
+				return errors.New("no authorized keys specified")
+			}
 
-				authKeys := make([][]byte, 0, len(authorizedKeys))
-				for _, k := range authorizedKeys {
-					key, err := base64.RawStdEncoding.DecodeString(k)
-					if err != nil {
-						return errors.Wrapf(err, "failed to base64 decode key %q", k)
-					}
-					authKeys = append(authKeys, key)
-				}
-
-				_, privKey, err := ed25519.GenerateKey(nil)
+			authKeys := make([][]byte, 0, len(authorizedKeys))
+			for _, k := range authorizedKeys {
+				key, err := base64.RawStdEncoding.DecodeString(k)
 				if err != nil {
-					return errors.WithStack(err)
+					return errors.Wrapf(err, "failed to base64 decode key %q", k)
 				}
+				authKeys = append(authKeys, key)
+			}
 
-				signer, err := ssh.NewSignerFromKey(privKey)
-				if err != nil {
-					return errors.WithStack(err)
-				}
+			_, privKey, err := ed25519.GenerateKey(nil)
+			if err != nil {
+				return errors.WithStack(err)
+			}
 
-				for {
-					if err := runServer(ctx, signer, authKeys); err != nil {
-						if errors.Is(err, ctx.Err()) {
-							return err
-						}
-						logger.Get(ctx).Error("SSH server failed", zap.Error(err))
+			signer, err := ssh.NewSignerFromKey(privKey)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
+			for {
+				if err := runServer(ctx, signer, authKeys); err != nil {
+					if errors.Is(err, ctx.Err()) {
+						return err
 					}
+					logger.Get(ctx).Error("SSH server failed", zap.Error(err))
 				}
-			},
-		})
-		return nil
-	}
+			}
+		}),
+	)
 }
 
 func runServer(ctx context.Context, signer ssh.Signer, authKeys [][]byte) error {

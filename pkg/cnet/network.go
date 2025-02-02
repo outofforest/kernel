@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/parse"
@@ -28,23 +29,21 @@ func NAT(name string, configurators ...Configurator) host.Configurator {
 	config := Config{
 		BridgeName: BridgeName(name),
 	}
-	return func(c *host.Configuration) error {
-		for _, configurator := range configurators {
-			configurator(&config)
-		}
+	for _, configurator := range configurators {
+		configurator(&config)
+	}
 
-		c.AddFirewallRules(
+	return cloudless.Join(
+		cloudless.Firewall(
 			firewall.ForwardTo(config.BridgeName),
 			firewall.ForwardFrom(config.BridgeName),
 			firewall.Masquerade(config.BridgeName),
-		)
-		c.RequireIPForwarding()
-		c.Prepare(func(ctx context.Context) error {
+		),
+		cloudless.EnableIPForwarding(),
+		cloudless.Prepare(func(ctx context.Context) error {
 			return createBridge(config)
-		})
-
-		return nil
-	}
+		}),
+	)
 }
 
 // IP4 configures network's IPv4 address on the host.

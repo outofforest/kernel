@@ -9,6 +9,7 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/logger"
@@ -51,17 +52,12 @@ func Service(configurators ...Configurator) host.Configurator {
 		configurator(&config)
 	}
 
-	return func(c *host.Configuration) error {
-		c.AddFirewallRules(firewall.OpenV4UDPPort(port))
-		c.StartServices(host.ServiceConfig{
-			Name:   "dns",
-			OnExit: parallel.Fail,
-			TaskFn: func(ctx context.Context) error {
-				return run(ctx, config)
-			},
-		})
-		return nil
-	}
+	return cloudless.Join(
+		cloudless.Firewall(firewall.OpenV4UDPPort(port)),
+		cloudless.Service("dns", parallel.Fail, func(ctx context.Context) error {
+			return run(ctx, config)
+		}),
+	)
 }
 
 func run(ctx context.Context, config Config) error {

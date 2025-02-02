@@ -13,6 +13,7 @@ import (
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/kernel"
 	"github.com/outofforest/cloudless/pkg/parse"
+	"github.com/outofforest/parallel"
 )
 
 var (
@@ -86,6 +87,14 @@ func Join(configurators ...host.Configurator) host.Configurator {
 			}
 		}
 
+		return nil
+	}
+}
+
+// Configuration provides host configuration.
+func Configuration(cfg **host.Configuration) host.Configurator {
+	return func(c *host.Configuration) error {
+		*cfg = c
 		return nil
 	}
 }
@@ -192,6 +201,66 @@ func Mount(source, target string, writable bool) host.Configurator {
 func Firewall(sources ...firewall.RuleSource) host.Configurator {
 	return func(c *host.Configuration) error {
 		c.AddFirewallRules(sources...)
+		return nil
+	}
+}
+
+// EnableIPForwarding enables IP forwarding.
+func EnableIPForwarding() host.Configurator {
+	return func(c *host.Configuration) error {
+		c.RequireIPForwarding()
+		return nil
+	}
+}
+
+// CreateInitramfs creates initramfs file.
+func CreateInitramfs() host.Configurator {
+	return func(c *host.Configuration) error {
+		c.RequireInitramfs()
+		return nil
+	}
+}
+
+// StartVirtServices starts virtualization services.
+func StartVirtServices() host.Configurator {
+	return func(c *host.Configuration) error {
+		c.RequireVirt()
+		return nil
+	}
+}
+
+// AllocateHugePages allocates huge pages.
+func AllocateHugePages(hugePages uint64) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.AddHugePages(hugePages)
+		return nil
+	}
+}
+
+// RequireContainers requires container images to be downloaded and cached.
+func RequireContainers(images ...string) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.RequireContainers(images...)
+		return nil
+	}
+}
+
+// Prepare runs system preparation function.
+func Prepare(prepares ...host.PrepareFn) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.Prepare(prepares...)
+		return nil
+	}
+}
+
+// Service starts service.
+func Service(name string, onExit parallel.OnExit, task parallel.Task) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.StartServices(host.ServiceConfig{
+			Name:   name,
+			OnExit: onExit,
+			TaskFn: task,
+		})
 		return nil
 	}
 }
