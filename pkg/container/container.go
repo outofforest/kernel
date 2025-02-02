@@ -33,12 +33,8 @@ import (
 	"github.com/outofforest/parallel"
 )
 
-const (
-	containerRoot = "/tmp/containers"
-
-	// AppDir is the path inside container where application's directory is mounted.
-	AppDir = "/app"
-)
+// AppDir is the path inside container where application's directory is mounted.
+const AppDir = "/app"
 
 var protectedFiles = map[string]struct{}{
 	"/etc/resolv.conf": {},
@@ -46,8 +42,9 @@ var protectedFiles = map[string]struct{}{
 
 // Config represents container configuration.
 type Config struct {
-	Name     string
-	Networks []NetworkConfig
+	Name         string
+	ContainerDir string
+	Networks     []NetworkConfig
 }
 
 // NetworkConfig represents container's network configuration.
@@ -78,9 +75,10 @@ type RunImageConfig struct {
 type RunImageConfigurator func(config *RunImageConfig)
 
 // New creates container.
-func New(name string, configurators ...Configurator) host.Configurator {
+func New(name, containerDir string, configurators ...Configurator) host.Configurator {
 	config := Config{
-		Name: name,
+		Name:         name,
+		ContainerDir: containerDir,
 	}
 
 	for _, configurator := range configurators {
@@ -226,13 +224,12 @@ func AppMount(hostAppDir string) host.Configurator {
 }
 
 func command(ctx context.Context, config Config) (*exec.Cmd, error) {
-	containerDir := filepath.Join(containerRoot, config.Name)
-	if err := os.MkdirAll(containerDir, 0o700); err != nil {
+	if err := os.MkdirAll(config.ContainerDir, 0o700); err != nil {
 		return nil, errors.WithStack(err)
 	}
 
 	cmd := exec.CommandContext(ctx, "/proc/self/exe")
-	cmd.Dir = containerDir
+	cmd.Dir = config.ContainerDir
 	cmd.Stdin = nil
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
