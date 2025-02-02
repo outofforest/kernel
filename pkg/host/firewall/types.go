@@ -13,6 +13,7 @@ const (
 	filterInputChainName    = "filter_input"
 	filterOutputChainName   = "filter_output"
 	filterForwardChainName  = "filter_forward"
+	natOutputChainName      = "nat_output"
 	natPreroutingChainName  = "nat_prerouting"
 	natPostroutingChainName = "nat_postrouting"
 )
@@ -76,6 +77,14 @@ func EnsureChains() (Chains, error) {
 		Hooknum:  nftables.ChainHookForward,
 		Priority: nftables.ChainPriorityFilter,
 		Policy:   lo.ToPtr(nftables.ChainPolicyDrop),
+	})
+	natOutputChainV4 := c.AddChain(&nftables.Chain{
+		Name:     natOutputChainName,
+		Table:    nfTableV4,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookOutput,
+		Priority: nftables.ChainPriorityNATSource,
+		Policy:   lo.ToPtr(nftables.ChainPolicyAccept),
 	})
 	natPreroutingChainV4 := c.AddChain(&nftables.Chain{
 		Name:     natPreroutingChainName,
@@ -146,6 +155,7 @@ func EnsureChains() (Chains, error) {
 	return Chains{
 		V4FilterInput:    filterInputChainV4,
 		V4FilterForward:  filterForwardChainV4,
+		V4NATOutput:      natOutputChainV4,
 		V4NATPrerouting:  natPreroutingChainV4,
 		V4NATPostrouting: natPostroutingChainV4,
 		V6FilterInput:    filterInputChainV6,
@@ -156,6 +166,7 @@ func EnsureChains() (Chains, error) {
 type Chains struct {
 	V4FilterInput    *nftables.Chain
 	V4FilterForward  *nftables.Chain
+	V4NATOutput      *nftables.Chain
 	V4NATPrerouting  *nftables.Chain
 	V4NATPostrouting *nftables.Chain
 	V6FilterInput    *nftables.Chain

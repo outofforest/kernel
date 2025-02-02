@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -114,7 +113,7 @@ func runServer(ctx context.Context, signer ssh.Signer, authKeys [][]byte) error 
 					return errors.WithStack(err)
 				}
 
-				spawn(fmt.Sprintf("client-%s", conn.RemoteAddr()), parallel.Continue, func(ctx context.Context) error {
+				spawn("client", parallel.Continue, func(ctx context.Context) error {
 					if err := client(ctx, conn, config); err != nil {
 						logger.Get(ctx).Error("SSH connection failed.", zap.Error(err))
 					}
@@ -157,10 +156,8 @@ func client(ctx context.Context, conn net.Conn, config *ssh.ServerConfig) error 
 			}
 		})
 		spawn("channels", parallel.Exit, func(ctx context.Context) error {
-			var chID uint64
-
 			for chReq := range newCh {
-				spawn(fmt.Sprintf("channel-%d", chID), parallel.Continue, func(ctx context.Context) error {
+				spawn("channel", parallel.Continue, func(ctx context.Context) error {
 					switch chReq.ChannelType() {
 					case "session":
 						if err := sessionHandler(ctx, chReq, reqCh); err != nil {

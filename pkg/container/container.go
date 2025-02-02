@@ -122,7 +122,7 @@ func RunImage(imageTag string, configurators ...RunImageConfigurator) host.Confi
 	return cloudless.Join(
 		cloudless.Configuration(&c),
 		cloudless.RequireContainers(imageTag),
-		cloudless.Service("image-"+imageTag, parallel.Fail, func(ctx context.Context) error {
+		cloudless.Service("containerImage", parallel.Fail, func(ctx context.Context) error {
 			if !c.IsContainer() {
 				return errors.New("image must be run inside container")
 			}

@@ -29,6 +29,7 @@ import (
 	"github.com/outofforest/cloudless/pkg/mount"
 	"github.com/outofforest/libexec"
 	"github.com/outofforest/logger"
+	"github.com/outofforest/logger/remote"
 	"github.com/outofforest/parallel"
 )
 
@@ -175,6 +176,7 @@ type Configuration struct {
 	topConfig           *Configuration
 	pkgRepo             *packageRepo
 	containerImagesRepo *containerImagesRepo
+	remoteLoggingConfig remote.Config
 
 	requireIPForwarding bool
 	requireInitramfs    bool
@@ -197,6 +199,11 @@ type Configuration struct {
 // IsContainer informs if configurator is executed in the context of container.
 func (c *Configuration) IsContainer() bool {
 	return c.topConfig.isContainer
+}
+
+// RemoteLogging configures remote logging.
+func (c *Configuration) RemoteLogging(lokiURL string) {
+	c.remoteLoggingConfig.URL = lokiURL
 }
 
 // RequireIPForwarding is called if host requires IP forwarding to be enabled.
@@ -358,94 +365,106 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 		return errors.New("host does not match the configuration")
 	}
 
+	var sendLogsTask parallel.Task
+	if cfg.remoteLoggingConfig.URL != "" {
+		ctx, sendLogsTask = remote.WithRemote(ctx, cfg.remoteLoggingConfig)
+	}
 	ctx = logger.With(ctx, zap.String("box", cfg.hostname))
 
-	//nolint:nestif
-	if !cfg.isContainer {
-		if cfg.requireVirt {
-			setupVirt(cfg)
+	return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+		if sendLogsTask != nil {
+			spawn("logSender", parallel.Fail, sendLogsTask)
 		}
+		spawn("", parallel.Fail, func(ctx context.Context) error {
+			//nolint:nestif
+			if !cfg.isContainer {
+				if cfg.requireVirt {
+					setupVirt(cfg)
+				}
 
-		if cfg.requireInitramfs {
-			if err := buildInitramfs(); err != nil {
+				if cfg.requireInitramfs {
+					if err := buildInitramfs(); err != nil {
+						return err
+					}
+				}
+				if err := removeOldRoot(); err != nil {
+					return err
+				}
+				if err := ConfigureKernelModules(cfg.kernelModules); err != nil {
+					return err
+				}
+			}
+
+			if err := configureMounts(cfg.mounts); err != nil {
 				return err
 			}
-		}
-		if err := removeOldRoot(); err != nil {
-			return err
-		}
-		if err := ConfigureKernelModules(cfg.kernelModules); err != nil {
-			return err
-		}
-	}
 
-	if err := configureMounts(cfg.mounts); err != nil {
-		return err
-	}
+			if cfg.isContainer {
+				if err := mount.ContainerRoot(); err != nil {
+					return err
+				}
+			}
 
-	if cfg.isContainer {
-		if err := mount.ContainerRoot(); err != nil {
-			return err
-		}
-	}
-
-	if err := configureDNS(cfg.dnses); err != nil {
-		return err
-	}
-	if err := configureIPv6(); err != nil {
-		return err
-	}
-	if err := configureEnv(cfg.hostname); err != nil {
-		return err
-	}
-	if err := configureHostname(cfg.hostname); err != nil {
-		return err
-	}
-	if err := configureNetworks(cfg.networks); err != nil {
-		return err
-	}
-	if err := configureGateway(cfg.gateway); err != nil {
-		return err
-	}
-	if err := configureFirewall(cfg.firewall); err != nil {
-		return err
-	}
-
-	//nolint:nestif
-	if !cfg.isContainer {
-		if err := installPackages(ctx, cfg.yumMirrors, cfg.packages); err != nil {
-			return err
-		}
-		if cfg.requireVirt {
-			if err := pruneVirt(); err != nil {
+			if err := configureDNS(cfg.dnses); err != nil {
 				return err
 			}
-		}
-		if err := configureLimits(); err != nil {
-			return err
-		}
-		if err := configureHugePages(cfg.hugePages); err != nil {
-			return err
-		}
-	}
+			if err := configureIPv6(); err != nil {
+				return err
+			}
+			if err := configureEnv(cfg.hostname); err != nil {
+				return err
+			}
+			if err := configureHostname(cfg.hostname); err != nil {
+				return err
+			}
+			if err := configureNetworks(cfg.networks); err != nil {
+				return err
+			}
+			if err := configureGateway(cfg.gateway); err != nil {
+				return err
+			}
+			if err := configureFirewall(cfg.firewall); err != nil {
+				return err
+			}
 
-	if cfg.requireIPForwarding {
-		if err := configureIPForwarding(); err != nil {
-			return err
-		}
-	}
-	if err := runPrepares(ctx, cfg.prepare); err != nil {
-		return err
-	}
-	err := runServices(ctx, cfg.services)
-	switch {
-	case errors.Is(err, ErrPowerOff):
-		return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF))
-	case errors.Is(err, ErrReboot):
-		return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART))
-	default:
-		return err
-	}
+			//nolint:nestif
+			if !cfg.isContainer {
+				if err := installPackages(ctx, cfg.yumMirrors, cfg.packages); err != nil {
+					return err
+				}
+				if cfg.requireVirt {
+					if err := pruneVirt(); err != nil {
+						return err
+					}
+				}
+				if err := configureLimits(); err != nil {
+					return err
+				}
+				if err := configureHugePages(cfg.hugePages); err != nil {
+					return err
+				}
+			}
+
+			if cfg.requireIPForwarding {
+				if err := configureIPForwarding(); err != nil {
+					return err
+				}
+			}
+			if err := runPrepares(ctx, cfg.prepare); err != nil {
+				return err
+			}
+			err := runServices(ctx, cfg.services)
+			switch {
+			case errors.Is(err, ErrPowerOff):
+				return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF))
+			case errors.Is(err, ErrReboot):
+				return errors.WithStack(syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART))
+			default:
+				return err
+			}
+		})
+		return nil
+	})
 }
 
 // ConfigureKernelModules loads kernel modules.

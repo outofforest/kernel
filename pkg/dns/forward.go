@@ -2,7 +2,6 @@ package dns
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"time"
 
@@ -23,8 +22,8 @@ type forwardRequest struct {
 
 func runForwarders(ctx context.Context, forwardIPs []net.IP, ch <-chan forwardRequest) error {
 	return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
-		for i := range numOfForwarders {
-			spawn(fmt.Sprintf("forwarder-%d", i), parallel.Fail, func(ctx context.Context) error {
+		for range numOfForwarders {
+			spawn("forwarder", parallel.Fail, func(ctx context.Context) error {
 				b := make([]byte, bufferSize)
 				conns := make([]*net.UDPConn, 0, len(forwardIPs))
 				defer func() {
