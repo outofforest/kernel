@@ -10,6 +10,7 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/logger"
 	"github.com/outofforest/parallel"
@@ -36,41 +37,34 @@ var servers = []string{
 
 // Service creates new NTP service.
 func Service() host.Configurator {
-	return func(c *host.Configuration) error {
-		c.StartServices(host.ServiceConfig{
-			Name:   "ntp",
-			OnExit: parallel.Fail,
-			TaskFn: func(ctx context.Context) error {
-				log := logger.Get(ctx)
-				rnd := rand.New(rand.NewSource(time.Now().Unix()))
-				for {
-					server := servers[rnd.Intn(len(servers))]
-					resp, err := ntp.Query(server)
-					if err != nil {
-						select {
-						case <-ctx.Done():
-							return errors.WithStack(ctx.Err())
-						case <-time.After(10 * time.Second):
-							log.Error("Getting time from NTP server failed.", zap.String("server", server),
-								zap.Error(err))
-							continue
-						}
-					}
-
-					if err := syscall.Settimeofday(&syscall.Timeval{
-						Sec: time.Now().Add(resp.ClockOffset).Unix(),
-					}); err != nil {
-						return errors.WithStack(err)
-					}
-
-					select {
-					case <-ctx.Done():
-						return errors.WithStack(ctx.Err())
-					case <-time.After(time.Hour):
-					}
+	return cloudless.Service("ntp", parallel.Fail, func(ctx context.Context) error {
+		log := logger.Get(ctx)
+		rnd := rand.New(rand.NewSource(time.Now().Unix()))
+		for {
+			server := servers[rnd.Intn(len(servers))]
+			resp, err := ntp.Query(server)
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return errors.WithStack(ctx.Err())
+				case <-time.After(10 * time.Second):
+					log.Error("Getting time from NTP server failed.", zap.String("server", server),
+						zap.Error(err))
+					continue
 				}
-			},
-		})
-		return nil
-	}
+			}
+
+			if err := syscall.Settimeofday(&syscall.Timeval{
+				Sec: time.Now().Add(resp.ClockOffset).Unix(),
+			}); err != nil {
+				return errors.WithStack(err)
+			}
+
+			select {
+			case <-ctx.Done():
+				return errors.WithStack(ctx.Err())
+			case <-time.After(time.Hour):
+			}
+		}
+	})
 }

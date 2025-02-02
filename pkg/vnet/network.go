@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/kernel"
@@ -38,35 +39,35 @@ type Configurator func(n *Config)
 
 // NAT creates NATed network.
 func NAT(name, mac string, configurators ...Configurator) host.Configurator {
-	return func(c *host.Configuration) error {
-		var n Config
+	var n Config
 
-		netUUID, err := uuid.NewUUID()
-		if err != nil {
-			return errors.WithStack(err)
-		}
+	hostMAC := parse.MAC(mac)
+	ifName := "v" + strings.ToLower(name)
+	if len(ifName) > 15 {
+		ifName = ifName[:15]
+	}
 
-		hostMAC := parse.MAC(mac)
-		ifName := "v" + strings.ToLower(name)
-		if len(ifName) > 15 {
-			ifName = ifName[:15]
-		}
+	for _, configurator := range configurators {
+		configurator(&n)
+	}
 
-		for _, configurator := range configurators {
-			configurator(&n)
-		}
-
-		c.AddFirewallRules(
+	return cloudless.Join(
+		cloudless.Firewall(
 			firewall.ForwardTo(ifName),
 			firewall.ForwardFrom(ifName),
 			firewall.Masquerade(ifName),
-		)
-		c.RequireIPForwarding()
-		c.RequireVirt()
-		c.RequireKernelModules(kernel.Module{
+		),
+		cloudless.EnableIPForwarding(),
+		cloudless.StartVirtServices(),
+		cloudless.KernelModules(kernel.Module{
 			Name: "tun",
-		})
-		c.Prepare(func(_ context.Context) error {
+		}),
+		cloudless.Prepare(func(_ context.Context) error {
+			netUUID, err := uuid.NewUUID()
+			if err != nil {
+				return errors.WithStack(err)
+			}
+
 			filePath := fmt.Sprintf("/etc/libvirt/qemu/networks/%s.xml", name)
 			f, err := os.OpenFile(filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 			if err != nil {
@@ -106,10 +107,8 @@ func NAT(name, mac string, configurators ...Configurator) host.Configurator {
 
 			return errors.WithStack(os.Link(filePath,
 				filepath.Join(filepath.Dir(filePath), "autostart", filepath.Base(filePath))))
-		})
-
-		return nil
-	}
+		}),
+	)
 }
 
 // IP4 configures network's IPv4 address on the host.

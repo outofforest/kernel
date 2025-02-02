@@ -89,41 +89,33 @@ type RunImageConfigurator func(config *RunImageConfig)
 
 // New creates container.
 func New(name string, configurators ...Configurator) host.Configurator {
-	return func(c *host.Configuration) error {
-		config := Config{
-			Name: name,
-		}
-
-		for _, configurator := range configurators {
-			configurator(&config)
-		}
-
-		c.StartServices(host.ServiceConfig{
-			Name:   "container-" + name,
-			OnExit: parallel.Fail,
-			TaskFn: func(ctx context.Context) error {
-				cmd, err := command(ctx, config)
-				if err != nil {
-					return err
-				}
-				if err := cmd.Start(); err != nil {
-					return errors.WithStack(err)
-				}
-
-				if err := joinNetworks(cmd.Process.Pid, config); err != nil {
-					return err
-				}
-
-				if err := cmd.Process.Signal(syscall.SIGUSR1); err != nil {
-					return errors.WithStack(err)
-				}
-
-				return errors.WithStack(cmd.Wait())
-			},
-		})
-
-		return nil
+	config := Config{
+		Name: name,
 	}
+
+	for _, configurator := range configurators {
+		configurator(&config)
+	}
+
+	return cloudless.Service("container-"+name, parallel.Fail, func(ctx context.Context) error {
+		cmd, err := command(ctx, config)
+		if err != nil {
+			return err
+		}
+		if err := cmd.Start(); err != nil {
+			return errors.WithStack(err)
+		}
+
+		if err := joinNetworks(cmd.Process.Pid, config); err != nil {
+			return err
+		}
+
+		if err := cmd.Process.Signal(syscall.SIGUSR1); err != nil {
+			return errors.WithStack(err)
+		}
+
+		return errors.WithStack(cmd.Wait())
+	})
 }
 
 // Network adds network to the config.
@@ -152,80 +144,76 @@ func Expose(proto, hostIP string, hostPort, containerPort uint16, public bool) C
 
 // RunImage runs image.
 func RunImage(imageTag string, configurators ...RunImageConfigurator) host.Configurator {
-	return func(c *host.Configuration) error {
-		c.RequireContainers(imageTag)
-		c.StartServices(host.ServiceConfig{
-			Name:   "image-" + imageTag,
-			OnExit: parallel.Fail,
-			TaskFn: func(ctx context.Context) error {
-				if !c.IsContainer() {
-					return errors.New("image must be run inside container")
+	var c *host.Configuration
+	return cloudless.Join(
+		cloudless.Configuration(&c),
+		cloudless.RequireContainers(imageTag),
+		cloudless.Service("image-"+imageTag, parallel.Fail, func(ctx context.Context) error {
+			if !c.IsContainer() {
+				return errors.New("image must be run inside container")
+			}
+
+			m, err := fetchManifest(ctx, imageTag, c.ContainerMirrors())
+			if err != nil {
+				return err
+			}
+
+			ic, err := fetchConfig(ctx, imageTag, m, c.ContainerMirrors())
+			if err != nil {
+				return err
+			}
+
+			config := RunImageConfig{
+				Entrypoint: ic.Config.Entrypoint,
+				Cmd:        ic.Config.Cmd,
+				WorkingDir: ic.Config.WorkingDir,
+				EnvVars:    map[string]string{},
+			}
+
+			for _, ev := range ic.Config.Env {
+				pos := strings.Index(ev, "=")
+				if pos < 0 {
+					continue
 				}
 
-				m, err := fetchManifest(ctx, imageTag, c.ContainerMirrors())
-				if err != nil {
-					return err
+				evName := strings.TrimSpace(ev[:pos])
+				if evName == "" {
+					continue
+				}
+				evValue := strings.TrimSpace(ev[pos+1:])
+				if evValue == "" {
+					delete(config.EnvVars, evName)
+					continue
 				}
 
-				ic, err := fetchConfig(ctx, imageTag, m, c.ContainerMirrors())
-				if err != nil {
-					return err
-				}
+				config.EnvVars[evName] = evValue
+			}
 
-				config := RunImageConfig{
-					Entrypoint: ic.Config.Entrypoint,
-					Cmd:        ic.Config.Cmd,
-					WorkingDir: ic.Config.WorkingDir,
-					EnvVars:    map[string]string{},
-				}
+			for _, configurator := range configurators {
+				configurator(&config)
+			}
 
-				for _, ev := range ic.Config.Env {
-					pos := strings.Index(ev, "=")
-					if pos < 0 {
-						continue
-					}
+			args := append(append([]string{}, config.Entrypoint...), config.Cmd...)
+			if len(args) == 0 {
+				return errors.Errorf("no command specified")
+			}
+			envVars := make([]string, 0, len(config.EnvVars))
+			for k, v := range config.EnvVars {
+				envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
+			}
 
-					evName := strings.TrimSpace(ev[:pos])
-					if evName == "" {
-						continue
-					}
-					evValue := strings.TrimSpace(ev[pos+1:])
-					if evValue == "" {
-						delete(config.EnvVars, evName)
-						continue
-					}
+			if err := inflateImage(ctx, imageTag, m, c.ContainerMirrors()); err != nil {
+				return err
+			}
 
-					config.EnvVars[evName] = evValue
-				}
-
-				for _, configurator := range configurators {
-					configurator(&config)
-				}
-
-				args := append(append([]string{}, config.Entrypoint...), config.Cmd...)
-				if len(args) == 0 {
-					return errors.Errorf("no command specified")
-				}
-				envVars := make([]string, 0, len(config.EnvVars))
-				for k, v := range config.EnvVars {
-					envVars = append(envVars, fmt.Sprintf("%s=%s", k, v))
-				}
-
-				if err := inflateImage(ctx, imageTag, m, c.ContainerMirrors()); err != nil {
-					return err
-				}
-
-				return libexec.Exec(ctx, &exec.Cmd{
-					Path: args[0],
-					Args: args,
-					Env:  envVars,
-					Dir:  config.WorkingDir,
-				})
-			},
-		})
-
-		return nil
-	}
+			return libexec.Exec(ctx, &exec.Cmd{
+				Path: args[0],
+				Args: args,
+				Env:  envVars,
+				Dir:  config.WorkingDir,
+			})
+		}),
+	)
 }
 
 // EnvVar sets environment variable inside container.

@@ -3,6 +3,7 @@ package pxe
 import (
 	"context"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/pxe/dhcp6"
@@ -12,22 +13,17 @@ import (
 
 // Service returns PXE service.
 func Service(efiDevPath string) host.Configurator {
-	return func(c *host.Configuration) error {
-		c.AddFirewallRules(
+	return cloudless.Join(
+		cloudless.Firewall(
 			firewall.OpenV6UDPPort(dhcp6.Port),
 			firewall.OpenV6UDPPort(tftp.Port),
-		)
-		c.StartServices(host.ServiceConfig{
-			Name:   "pxe",
-			OnExit: parallel.Fail,
-			TaskFn: func(ctx context.Context) error {
-				return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
-					spawn("dhcp6", parallel.Fail, dhcp6.Run)
-					spawn("tftp", parallel.Fail, tftp.NewRun(efiDevPath))
-					return nil
-				})
-			},
-		})
-		return nil
-	}
+		),
+		cloudless.Service("pxe", parallel.Fail, func(ctx context.Context) error {
+			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+				spawn("dhcp6", parallel.Fail, dhcp6.Run)
+				spawn("tftp", parallel.Fail, tftp.NewRun(efiDevPath))
+				return nil
+			})
+		}),
+	)
 }

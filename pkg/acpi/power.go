@@ -8,6 +8,7 @@ import (
 	"github.com/mdlayher/netlink"
 	"github.com/pkg/errors"
 
+	"github.com/outofforest/cloudless"
 	"github.com/outofforest/cloudless/pkg/host"
 	"github.com/outofforest/parallel"
 )
@@ -20,46 +21,39 @@ const (
 
 // PowerService creates new ACPI service for powering off and rebooting the host.
 func PowerService() host.Configurator {
-	return func(c *host.Configuration) error {
-		c.StartServices(host.ServiceConfig{
-			Name:   "acpi-power",
-			OnExit: parallel.Fail,
-			TaskFn: func(ctx context.Context) error {
-				conn, err := genetlink.Dial(nil)
-				if err != nil {
-					return errors.WithStack(err)
+	return cloudless.Service("acpi-power", parallel.Fail, func(ctx context.Context) error {
+		conn, err := genetlink.Dial(nil)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		defer conn.Close()
+
+		if err := subscribe(conn); err != nil {
+			return err
+		}
+
+		return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
+			spawn("watchdog", parallel.Fail, func(ctx context.Context) error {
+				<-ctx.Done()
+				_ = conn.Close()
+				return errors.WithStack(ctx.Err())
+			})
+			spawn("client", parallel.Fail, func(ctx context.Context) error {
+				for {
+					msgs, _, err := conn.Receive()
+					if err != nil {
+						return errors.WithStack(err)
+					}
+
+					if err := react(msgs); err != nil {
+						return errors.WithStack(err)
+					}
 				}
-				defer conn.Close()
+			})
 
-				if err := subscribe(conn); err != nil {
-					return err
-				}
-
-				return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
-					spawn("watchdog", parallel.Fail, func(ctx context.Context) error {
-						<-ctx.Done()
-						_ = conn.Close()
-						return errors.WithStack(ctx.Err())
-					})
-					spawn("client", parallel.Fail, func(ctx context.Context) error {
-						for {
-							msgs, _, err := conn.Receive()
-							if err != nil {
-								return errors.WithStack(err)
-							}
-
-							if err := react(msgs); err != nil {
-								return errors.WithStack(err)
-							}
-						}
-					})
-
-					return nil
-				})
-			},
+			return nil
 		})
-		return nil
-	}
+	})
 }
 
 func react(msgs []genetlink.Message) error {
