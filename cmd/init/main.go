@@ -8,6 +8,7 @@ import (
 	containercache "github.com/outofforest/cloudless/pkg/container/cache"
 	"github.com/outofforest/cloudless/pkg/dns"
 	"github.com/outofforest/cloudless/pkg/grafana"
+	"github.com/outofforest/cloudless/pkg/host/firewall"
 	"github.com/outofforest/cloudless/pkg/ntp"
 	"github.com/outofforest/cloudless/pkg/pxe"
 	"github.com/outofforest/cloudless/pkg/ssh"
@@ -72,6 +73,10 @@ var deployment = Deployment(
 	Host("vm",
 		Gateway("10.0.1.1"),
 		Network("00:01:0a:00:02:05", "10.0.1.2/24"),
+		Firewall(
+			// Grafana.
+			firewall.RedirectV4TCPPort("10.0.1.2", 8080, "10.0.2.2", grafana.Port),
+		),
 		cnet.NAT("monitoring",
 			cnet.IP4("10.0.2.1/24"),
 		),

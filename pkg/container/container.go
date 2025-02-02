@@ -46,9 +46,8 @@ var protectedFiles = map[string]struct{}{
 
 // Config represents container configuration.
 type Config struct {
-	Name         string
-	Networks     []NetworkConfig
-	ExposedPorts []ExposedPortConfig
+	Name     string
+	Networks []NetworkConfig
 }
 
 // NetworkConfig represents container's network configuration.
@@ -73,15 +72,6 @@ type RunImageConfig struct {
 
 	// Cmd sets command to execute inside container.
 	Cmd []string
-}
-
-// ExposedPortConfig defines a port to be exposed from the container.
-type ExposedPortConfig struct {
-	Protocol      string
-	HostIP        net.IP
-	HostPort      uint16
-	NamespacePort uint16
-	Public        bool
 }
 
 // RunImageConfigurator defines function setting the container image execution configuration.
@@ -124,20 +114,6 @@ func Network(name, mac string) Configurator {
 		c.Networks = append(c.Networks, NetworkConfig{
 			Name: name,
 			MAC:  parse.MAC(mac),
-		})
-	}
-}
-
-// Expose exposes container's port.
-func Expose(proto, hostIP string, hostPort, containerPort uint16, public bool) Configurator {
-	hostIPParsed := parse.IP4(hostIP)
-	return func(config *Config) {
-		config.ExposedPorts = append(config.ExposedPorts, ExposedPortConfig{
-			Protocol:      proto,
-			HostIP:        hostIPParsed,
-			HostPort:      hostPort,
-			NamespacePort: containerPort,
-			Public:        public,
 		})
 	}
 }
