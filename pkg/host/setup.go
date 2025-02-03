@@ -331,14 +331,9 @@ func Run(ctx context.Context, configurators ...Configurator) error {
 			return err
 		}
 
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGUSR1)
-		defer signal.Stop(sig)
-
-		select {
-		case <-sig:
-		case <-ctx.Done():
-			return errors.WithStack(ctx.Err())
+		// By closing stdin parent process signals that everything is prepared.
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			return errors.WithStack(err)
 		}
 	} else {
 		if err := mount.HostRoot(); err != nil {

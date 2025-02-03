@@ -86,7 +86,7 @@ func New(name, containerDir string, configurators ...Configurator) host.Configur
 	}
 
 	return cloudless.Service("container-"+name, parallel.Fail, func(ctx context.Context) error {
-		cmd, err := command(ctx, config)
+		cmd, stdInCloser, err := command(ctx, config)
 		if err != nil {
 			return err
 		}
@@ -98,7 +98,7 @@ func New(name, containerDir string, configurators ...Configurator) host.Configur
 			return err
 		}
 
-		if err := cmd.Process.Signal(syscall.SIGUSR1); err != nil {
+		if err := stdInCloser.Close(); err != nil {
 			return errors.WithStack(err)
 		}
 
@@ -223,14 +223,16 @@ func AppMount(hostAppDir string) host.Configurator {
 	return cloudless.Mount(hostAppDir, AppDir, true)
 }
 
-func command(ctx context.Context, config Config) (*exec.Cmd, error) {
+func command(ctx context.Context, config Config) (*exec.Cmd, io.Closer, error) {
 	if err := os.MkdirAll(config.ContainerDir, 0o700); err != nil {
-		return nil, errors.WithStack(err)
+		return nil, nil, errors.WithStack(err)
 	}
+
+	pipeReader, pipeWriter := io.Pipe()
 
 	cmd := exec.CommandContext(ctx, "/proc/self/exe")
 	cmd.Dir = config.ContainerDir
-	cmd.Stdin = nil
+	cmd.Stdin = pipeReader
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = []string{host.ContainerEnvVar + "=" + config.Name}
@@ -268,7 +270,7 @@ func command(ctx context.Context, config Config) (*exec.Cmd, error) {
 		return nil
 	}
 
-	return cmd, nil
+	return cmd, pipeWriter, nil
 }
 
 func joinNetworks(pid int, config Config) error {
