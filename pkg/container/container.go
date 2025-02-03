@@ -30,6 +30,7 @@ import (
 	"github.com/outofforest/cloudless/pkg/parse"
 	"github.com/outofforest/cloudless/pkg/retry"
 	"github.com/outofforest/libexec"
+	"github.com/outofforest/logger"
 	"github.com/outofforest/parallel"
 )
 
@@ -180,11 +181,14 @@ func RunImage(imageTag string, configurators ...RunImageConfigurator) host.Confi
 				return err
 			}
 
+			log := logger.Get(ctx)
 			return libexec.Exec(ctx, &exec.Cmd{
-				Path: args[0],
-				Args: args,
-				Env:  envVars,
-				Dir:  config.WorkingDir,
+				Path:   args[0],
+				Args:   args,
+				Env:    envVars,
+				Dir:    config.WorkingDir,
+				Stdout: newStreamLogger(log),
+				Stderr: newStreamLogger(log),
 			})
 		}),
 	)

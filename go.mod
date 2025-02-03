@@ -39,6 +39,7 @@ require (
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/outofforest/ioc/v2 v2.5.2 // indirect
+	github.com/outofforest/spin v0.3.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pkg/xattr v0.4.10 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
