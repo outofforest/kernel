@@ -652,7 +652,6 @@ func runServices(ctx context.Context, services []ServiceConfig) error {
 			return parallel.Run(ctx, func(ctx context.Context, spawn parallel.SpawnFn) error {
 				for _, s := range services {
 					spawn(s.Name, s.OnExit, func(ctx context.Context) error {
-						ctx = logger.With(ctx, zap.String("service", s.Name))
 						log := logger.Get(ctx)
 
 						log.Info("Starting service")
