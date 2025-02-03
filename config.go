@@ -99,6 +99,14 @@ func Configuration(cfg **host.Configuration) host.Configurator {
 	}
 }
 
+// RemoteLogging configures remote logging.
+func RemoteLogging(lokiURL string) host.Configurator {
+	return func(c *host.Configuration) error {
+		c.RemoteLogging(lokiURL)
+		return nil
+	}
+}
+
 // Gateway defines gateway.
 func Gateway(gateway string) host.Configurator {
 	ip := parse.IP4(gateway)

@@ -39,6 +39,7 @@ var (
 var deployment = Deployment(
 	ImmediateKernelModules(DefaultKernelModules...),
 	DNS(DefaultDNS...),
+	RemoteLogging("http://10.0.0.155:3001"),
 	Host("pxe",
 		Gateway("10.0.0.1"),
 		Network("00:01:0a:00:00:05", "10.0.0.100/24", "fe80::1/10"),
@@ -68,7 +69,10 @@ var deployment = Deployment(
 		Network("00:01:0a:00:00:9b", "10.0.0.155/24"),
 		Firewall(
 			// Grafana.
-			firewall.RedirectV4TCPPort("10.0.0.155", 3000, "10.0.1.2", 3000),
+			firewall.RedirectV4TCPPort("10.0.0.155", 3000, "10.0.1.2/24", 3000),
+
+			// Loki.
+			firewall.RedirectV4TCPPort("10.0.0.155", 3001, "10.0.1.2/24", 3001),
 		),
 		vnet.NAT("internal", "52:54:00:6d:94:c0", vnet.IP4("10.0.1.1/24")),
 		vm.New("vm", 5, 4, vm.Network("internal", "00:01:0a:00:02:05")),
@@ -78,7 +82,10 @@ var deployment = Deployment(
 		Network("00:01:0a:00:02:05", "10.0.1.2/24"),
 		Firewall(
 			// Grafana.
-			firewall.RedirectV4TCPPort("10.0.1.2", 3000, "10.0.2.2", grafana.Port),
+			firewall.RedirectV4TCPPort("10.0.1.2", 3000, "10.0.2.2/24", grafana.Port),
+
+			// Loki.
+			firewall.RedirectV4TCPPort("10.0.1.2", 3001, "10.0.2.4/24", loki.Port),
 		),
 		cnet.NAT("monitoring", cnet.IP4("10.0.2.1/24")),
 		container.New("grafana", "/tmp/containers/grafana",
